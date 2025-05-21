@@ -19,8 +19,8 @@ import re
 import logging
 import difflib
 
-# Version V2 (mise à jour le 22/05/2025) - VERSION FINALE AVEC HTML SCRAPING
-logging.info("=== RUNNING FINAL HTML SCRAPING VERSION WITH MINIMAL SUPABASE CLIENT (22/05/2025) ===")
+# Version V2 (mise à jour le 22/05/2025) - VERSION FINALE AVEC HTML SCRAPING ET LOGS DE DEBUG AMÉLIORÉS
+logging.info("=== RUNNING FINAL HTML SCRAPING VERSION WITH MINIMAL SUPABASE CLIENT (22/05/2025) - DEBUG LOGS V2 ===")
 
 # Configuration du logging - AVANT tout pour voir tous les logs
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -142,7 +142,8 @@ chrome_options.add_argument(
 )
 
 # Initialisation du driver
-driver = uc.Chrome(options=chrome_options)
+# Déclaration initiale du driver pour qu'il soit dans le scope du finally
+driver = None 
 
 def close_popins(driver_instance):
     logging.info("Tentative de fermeture des popins...")
@@ -156,24 +157,34 @@ def close_popins(driver_instance):
         "button.didomi-components-button.didomi-components-button-primary",  # Didomi
     ]
     for selector in known_popin_selectors:
+        logging.info(f"Vérification du sélecteur de pop-in: {selector}")
         try:
             buttons = driver_instance.find_elements(By.CSS_SELECTOR, selector)
-            for btn in buttons:
+            if not buttons:
+                logging.info(f"Aucun bouton trouvé pour le sélecteur: {selector}")
+                continue
+            logging.info(f"{len(buttons)} bouton(s) trouvé(s) pour le sélecteur: {selector}")
+            for i, btn in enumerate(buttons):
+                logging.info(f"Bouton {i+1}/{len(buttons)} pour {selector}: Affiché? {btn.is_displayed()}, Activé? {btn.is_enabled()}")
                 if btn.is_displayed() and btn.is_enabled():
-                    logging.info(f"Click sur popin via selector: {selector}")
+                    logging.info(f"Tentative de clic sur popin via selector: {selector} (bouton {i+1})")
                     driver_instance.execute_script("arguments[0].click();", btn)  # Clic JS plus robuste
+                    logging.info(f"Clic JS exécuté pour {selector} (bouton {i+1})")
                     popin_closed_by_click = True
                     time.sleep(2)  # Attendre que la popin disparaisse
+                    break # Sortir de la boucle des boutons pour ce sélecteur
+            if popin_closed_by_click:
+                 break # Sortir de la boucle des sélecteurs si un clic a réussi
         except Exception as e:
-            logging.debug(f"Erreur en cliquant sur {selector}: {e}")
+            logging.error(f"Erreur en cherchant/cliquant sur {selector}: {e}")
 
     if popin_closed_by_click:
         logging.info("Popin fermée par clic.")
     else:
-        logging.info("Aucune popin évidente trouvée pour clic, ou échec du clic.")
+        logging.info("Aucune popin évidente n'a pu être fermée par clic.")
 
     # Forcer la suppression des overlays/popins si toujours présents
-    # Cibler des conteneurs de popins connus
+    logging.info("Tentative de suppression des overlays/popins via JS...")
     js_remove_selectors = [
         '[class*="popin_tc_privacy"]',  # Betclic privacy
         '[id^="onetrust-banner"]',  # Onetrust banner
@@ -181,7 +192,7 @@ def close_popins(driver_instance):
         '[class*="overlay"]',  # Classes génériques d'overlay
         '[role="dialog"]'  # Rôles de dialogue souvent utilisés pour les modales
     ]
-    removed_count = 0
+    total_removed_count = 0
     for selector in js_remove_selectors:
         script = f"""
             let count = 0;
@@ -195,18 +206,24 @@ def close_popins(driver_instance):
             removed = driver_instance.execute_script(script)
             if removed > 0:
                 logging.info(f"{removed} élément(s) correspondant à '{selector}' supprimé(s) via JS.")
-                removed_count += removed
+                total_removed_count += removed
         except Exception as e:
             logging.warning(f"Erreur lors de la suppression JS de '{selector}': {e}")
 
-    if removed_count > 0:
-        logging.info(f"Total de {removed_count} éléments de popin/overlay supprimés via JS.")
+    if total_removed_count > 0:
+        logging.info(f"Total de {total_removed_count} éléments de popin/overlay supprimés via JS.")
     else:
-        logging.info("Aucun élément de popin/overlay supplémentaire supprimé via JS.")
+        logging.info("Aucun élément de popin/overlay supplémentaire n'a été supprimé via JS.")
     time.sleep(1)
 
 # DÉMARRAGE DU SCRIPT PRINCIPAL
+matches = [] # Initialisation pour le cas où le try échoue avant
+
 try:
+    logging.info("Initialisation du driver Chrome...")
+    driver = uc.Chrome(options=chrome_options)
+    logging.info("Driver initialisé.")
+
     driver.get(url)
     logging.info("Page chargée. Attente initiale de 5 secondes...")
     time.sleep(5)
@@ -251,7 +268,6 @@ try:
     logging.info("Fin du scroll.")
     # --- Fin de la logique de scroll ---
 
-    matches = []
     seen_urls = set()
     scraped_dt = datetime.now()
 
@@ -270,9 +286,9 @@ try:
         current_tour = ""  # Réinitialiser pour chaque carte (toujours vide pour Betclic apparemment)
 
         # Noms des joueurs
-        players = card.find_all("div", class_="scoreboard_contestantLabel")
-        player1 = players[0].text.strip() if len(players) > 0 else ""
-        player2 = players[1].text.strip() if len(players) > 1 else ""
+        players_elements = card.find_all("div", class_="scoreboard_contestantLabel")
+        player1 = players_elements[0].text.strip() if len(players_elements) > 0 else ""
+        player2 = players_elements[1].text.strip() if len(players_elements) > 1 else ""
 
         # URL de la rencontre
         a_tag = card.find("a", class_="cardEvent")
@@ -291,20 +307,7 @@ try:
             if match_obj:
                 full_slug = match_obj.group(1)
                 parts = full_slug.split('-')
-                # Logique améliorée pour diviser les noms, gère les noms composés
-                # Exemple: 'alex-de-minaur-vs-jan-lennard-struff'
-                # On cherche le 'vs' implicite. Le slug est 'joueur1-joueur2'
-                # On ne peut pas juste diviser par 2 si un joueur a un nom composé.
-                # Cependant, Betclic semble utiliser le même nombre de tirets pour chaque joueur
-                # Ex: 'alex-de-minaur' (2 tirets) et 'jan-lennard-struff' (2 tirets)
-                # Si les noms sont p.ex. 'taylor-fritz' et 'sebastian-baez', on divise par 2.
-                # Pour l'instant, on garde la division par 2, mais il faut être conscient de sa fragilité.
-                # Une meilleure approche serait d'avoir une liste de noms connus ou une heuristique plus fine.
                 n_parts = len(parts)
-                # Si le nombre de parties est impair, c'est difficile, on fait une approximation
-                # ex: novak-djokovic-carlos-alcaraz -> djokovic est partagé.
-                # Le slug betclic est souvent 'nom1part1-nom1part2-nom2part1-nom2part2'
-                # Donc diviser au milieu est généralement correct.
                 split_point = n_parts // 2
                 slug1 = '-'.join(parts[:split_point])
                 slug2 = '-'.join(parts[split_point:])
@@ -314,10 +317,10 @@ try:
 
                 player1_full = slug_to_name(slug1)
                 player2_full = slug_to_name(slug2)
-            else:  # Fallback si le regex ne match pas, mais qu'on a les noms courts
+            else:  
                 player1_full = player1
                 player2_full = player2
-        else:  # Fallback si pas de a_tag
+        else:  
             player1_full = player1
             player2_full = player2
 
@@ -325,32 +328,30 @@ try:
         event_info_time = card.find("div", class_="event_infoTime")
         if event_info_time and event_info_time.text.strip():
             date_heure_text = event_info_time.text.strip()
-            # Gérer "Auj.", "Dem." et les dates complètes
-            if "Auj." in date_heure_text or "Dem." in date_heure_text:  # ex: "Auj. 14:00" ou "Dem. Jeu. 23:00"
+            if "Auj." in date_heure_text or "Dem." in date_heure_text:  
                 parts = date_heure_text.split()
                 if len(parts) >= 2:
-                    current_date = parts[0]  # Peut être "Auj." ou "Dem."
-                    current_heure = parts[-1]  # L'heure est toujours la dernière partie
-            else:  # ex: "Jeu. 01/01 15:00"
+                    current_date = parts[0]  
+                    current_heure = parts[-1]  
+            else:  
                 parts = date_heure_text.split()
-                if len(parts) == 3:  # "Jeu. 01/01 15:00"
-                    current_date = f"{parts[0]} {parts[1]}"  # "Jeu. 01/01"
-                    current_heure = parts[2]  # "15:00"
-                elif len(parts) == 2:  # Cas "01/01 15:00" (moins probable sans jour)
+                if len(parts) == 3:  
+                    current_date = f"{parts[0]} {parts[1]}"  
+                    current_heure = parts[2]  
+                elif len(parts) == 2:  
                     current_date = parts[0]
                     current_heure = parts[1]
 
-        # Extraction du nom du tournoi depuis l'URL (généralement plus fiable)
+        # Extraction du nom du tournoi depuis l'URL 
         if a_tag and "href" in a_tag.attrs:
             url_parts = a_tag["href"].split("/")
-            if len(url_parts) > 2:  # e.g., /fr/tennis/atp-rome-c33/...
-                tournoi_slug_full = url_parts[2]  # "atp-rome-c33" ou "roland-garros- 프랑스 오픈-c123"
-                # Prendre tout avant le premier "-c" suivi de chiffres
+            if len(url_parts) > 2:  
+                tournoi_slug_full = url_parts[2]  
                 tournoi_match = re.match(r"^(.*?)(-c\d+)?$", tournoi_slug_full)
                 if tournoi_match:
                     tournoi_slug = tournoi_match.group(1)
                     current_tournoi = tournoi_slug.replace('-', ' ').title()
-                else:  # Fallback si le regex ne match pas
+                else:  
                     current_tournoi = tournoi_slug_full.replace('-', ' ').title()
 
         logging.info(
@@ -360,7 +361,7 @@ try:
             "date": current_date,
             "heure": current_heure,
             "tournoi": current_tournoi,
-            "tour": current_tour,  # Reste vide car non trouvé sur la page Betclic
+            "tour": current_tour,  
             "player1": player1_full,
             "player2": player2_full,
             "match_url": match_url,
@@ -371,14 +372,34 @@ try:
 except Exception as e:
     logging.error(f"Erreur globale lors de l'extraction: {str(e)}", exc_info=True)
 finally:
+    logging.info("Bloc finally atteint.")
     # Enregistrement de la page pour le débogage
+    if driver and hasattr(driver, 'page_source'):
+        page_content_to_save = driver.page_source
+        logging.info(f"Contenu de la page récupéré pour page_debug.html (longueur: {len(page_content_to_save)} caractères).")
+    else:
+        page_content_to_save = "Driver non initialisé ou page_source non disponible."
+        logging.warning(page_content_to_save)
+        
     with open("page_debug.html", "w", encoding="utf-8") as f:
-        f.write(driver.page_source if 'driver' in locals() and driver.page_source else "No page source available")
+        f.write(page_content_to_save)
     logging.info("HTML sauvegardé dans page_debug.html")
 
+    # Log du début du fichier page_debug.html
+    try:
+        with open("page_debug.html", "r", encoding="utf-8") as f_read:
+            debug_content_preview = f_read.read(2000) # Lire les premiers 2000 caractères
+            logging.info(f"Début du contenu de page_debug.html (aperçu de {len(debug_content_preview)} caractères) :\n{debug_content_preview}")
+    except Exception as e_read:
+        logging.error(f"Impossible de lire page_debug.html pour l'aperçu : {e_read}")
+
     # Fermeture du navigateur
-    if 'driver' in locals():
+    if driver:
+        logging.info("Tentative de fermeture du driver...")
         driver.quit()
+        logging.info("Driver fermé.")
+    else:
+        logging.info("Driver non initialisé, pas de fermeture nécessaire.")
 
 logging.info(f"Nombre total de matchs extraits: {len(matches)}")
 
@@ -410,29 +431,18 @@ if not df.empty:
 
 
     def player_to_tennisabstract_url(player_name_on_site):
-        # Tennis Abstract utilise souvent des noms sans accents et en minuscules pour les URLs
-        # ex: 'Novak Djokovic' -> 'novakdjokovic'
-        # Il faut gérer les cas comme 'Alex De Minaur' -> 'alexdeminaur'
-
-        # Simple normalisation pour l'URL Tennis Abstract
         normalized_for_url = str(player_name_on_site).lower()
-        # Retirer accents (simple pour l'instant, une librairie comme `unidecode` serait mieux)
-        # Pour les besoins de l'URL, on retire juste les caractères non alphanumériques (sauf espace qu'on retire ensuite)
         normalized_for_url = re.sub(r'[^a-z0-9\s-]', '', normalized_for_url)
-        # Remplacer les espaces et tirets par rien
         normalized_for_url = normalized_for_url.replace(' ', '').replace('-', '')
         return f"https://www.tennisabstract.com/cgi-bin/player.cgi?p={normalized_for_url}"
 
 
     def find_best_slug_url(name, elo_df_local):
         if elo_df_local.empty:
-            # Si elo_df est vide, on ne peut pas faire de matching intelligent,
-            # on utilise la conversion directe du nom du site.
             return player_to_tennisabstract_url(name)
 
         norm_name_site = normalize_name(name)
 
-        # 1. Tentative de match exact (après normalisation)
         elo_df_local['normalized_player'] = elo_df_local['player'].apply(normalize_name)
         exact_match = elo_df_local[elo_df_local['normalized_player'] == norm_name_site]
         if not exact_match.empty:
@@ -440,23 +450,17 @@ if not df.empty:
             logging.debug(f"Exact match for '{name}' -> '{matched_elo_name}'")
             return player_to_tennisabstract_url(matched_elo_name)
 
-        # 2. Tentative de match approché avec difflib
         names_list_elo = elo_df_local['normalized_player'].tolist()
-        close_matches = difflib.get_close_matches(norm_name_site, names_list_elo, n=1,
-                                                  cutoff=0.80)  # Cutoff un peu plus strict
+        close_matches = difflib.get_close_matches(norm_name_site, names_list_elo, n=1, cutoff=0.80)
 
         if close_matches:
-            # Retrouver le nom original de la base Elo à partir du nom normalisé matché
             matched_normalized_name = close_matches[0]
-            original_elo_name_series = elo_df_local[elo_df_local['normalized_player'] == matched_normalized_name][
-                'player']
+            original_elo_name_series = elo_df_local[elo_df_local['normalized_player'] == matched_normalized_name]['player']
             if not original_elo_name_series.empty:
                 original_elo_name = original_elo_name_series.iloc[0]
-                logging.debug(
-                    f"Close match for '{name}' ({norm_name_site}) -> '{original_elo_name}' ({matched_normalized_name})")
+                logging.debug(f"Close match for '{name}' ({norm_name_site}) -> '{original_elo_name}' ({matched_normalized_name})")
                 return player_to_tennisabstract_url(original_elo_name)
 
-        # 3. Si aucun match, fallback sur la conversion directe du nom du site
         logging.warning(f"No close match for '{name}' in Elo DB. Using direct conversion for URL.")
         return player_to_tennisabstract_url(name)
 
@@ -465,35 +469,27 @@ if not df.empty:
     df["player1_url"] = df["player1"].apply(lambda n: find_best_slug_url(n, elo_df))
     df["player2_url"] = df["player2"].apply(lambda n: find_best_slug_url(n, elo_df))
 
-    # Assurer l'ordre des colonnes pour la base de données
     final_columns = ["date", "heure", "tournoi", "tour", "player1", "player2", "match_url",
                      "player1_url", "player2_url", "scraped_date", "scraped_time"]
-    # S'assurer que toutes les colonnes existent, ajouter celles qui manquent avec None ou ""
     for col in final_columns:
         if col not in df.columns:
-            df[col] = None if col.endswith("_url") else ""  # ou pd.NA
+            df[col] = None if col.endswith("_url") else ""
 
     df_for_upload = df[final_columns].copy()
-    # Normalise les noms des joueurs
     normalized_players_set = set(elo_df['player'].apply(normalize_name))
     df_for_upload = df_for_upload[
         (df_for_upload["player1"].apply(normalize_name).isin(normalized_players_set)) &
         (df_for_upload["player2"].apply(normalize_name).isin(normalized_players_set))
     ]
-    # logging.info(f"Matches avec 2 URLs joueurs valides: {len(df_for_upload)}/{len(df)}")
     logging.info(f"Matches avec 2 joueurs présents dans la base Elo: {len(df_for_upload)}/{len(df)}")
 
-    # Supprime tous les anciens matchs à venir
     logging.info("Suppression des anciens matchs de la table 'upcoming_matches'...")
     try:
-        delete_response = supabase.table("upcoming_matches").delete().neq('id',
-                                                                          -1).execute()  # neq est un placeholder pour "delete all"
-        logging.info(
-            f"Réponse de la suppression: {delete_response.data if hasattr(delete_response, 'data') else 'Pas de données de réponse'}")
+        delete_response = supabase.table("upcoming_matches").delete().neq('id', -1).execute()
+        logging.info(f"Réponse de la suppression: {delete_response.data if hasattr(delete_response, 'data') else 'Pas de données de réponse'}")
     except Exception as e:
         logging.error(f"Erreur lors de la suppression des anciens matchs: {e}")
 
-    # Insère les nouveaux matchs (par chunk de 100 pour éviter les timeouts ou limites de payload)
     logging.info(f"Insertion de {len(df_for_upload)} nouveaux matchs...")
     data_to_insert = df_for_upload.to_dict(orient='records')
 
@@ -502,8 +498,7 @@ if not df.empty:
         chunk = data_to_insert[i:i + chunk_size]
         try:
             insert_response = supabase.table("upcoming_matches").insert(chunk).execute()
-            logging.info(
-                f"Chunk {i // chunk_size + 1} inséré. Réponse: {insert_response.data if hasattr(insert_response, 'data') else 'Pas de données de réponse'}")
+            logging.info(f"Chunk {i // chunk_size + 1} inséré. Réponse: {insert_response.data if hasattr(insert_response, 'data') else 'Pas de données de réponse'}")
             if hasattr(insert_response, 'error') and insert_response.error:
                 logging.error(f"Erreur Supabase lors de l'insertion du chunk: {insert_response.error}")
         except Exception as e:
