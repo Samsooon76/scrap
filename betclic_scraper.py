@@ -24,7 +24,21 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Création du client Supabase avec gestion d'erreur pour le paramètre proxy
+try:
+    # Essayons d'abord sans options spéciales
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except TypeError as e:
+    if "proxy" in str(e):
+        logging.warning("Erreur avec le paramètre proxy, tentative alternative...")
+        # La version actuelle de supabase-py a un problème avec le paramètre proxy
+        # Importons directement la classe qu'on utilisera avec des paramètres simplifiés
+        from supabase._sync.client import SyncClient
+        supabase = SyncClient(SUPABASE_URL, SUPABASE_KEY, {})
+    else:
+        # Si c'est une autre erreur, la remonter
+        raise
 
 url = "https://www.betclic.fr/tennis-stennis"
 
