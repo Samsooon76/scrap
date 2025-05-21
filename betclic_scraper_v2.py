@@ -400,9 +400,9 @@ finally:
         
         with open(debug_file_path, "r", encoding="utf-8") as f_read:
             debug_content_preview = f_read.read(3000) # Augmenté à 3000 caractères
-            logging.info(f"APERÇU DU DÉBUT DE {debug_file_path} ({len(debug_content_preview)} caractères):
+            logging.info(f\"\"\"APERÇU DU DÉBUT DE {debug_file_path} ({len(debug_content_preview)} caractères):
 {debug_content_preview}
---- FIN DE L'APERÇU ---")
+--- FIN DE L\\'APERÇU ---\"\"\")
     except Exception as e_file:
         logging.error(f"Erreur lors de l'écriture ou lecture de {debug_file_path}: {e_file}")
 
