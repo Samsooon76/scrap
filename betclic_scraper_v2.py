@@ -4,14 +4,15 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+# ActionChains et Keys ne sont plus explicitement utilisés pour le scroll simple,
+# mais gardés au cas où une interaction plus complexe serait nécessaire plus tard.
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
 import os
-import json
-import httpx
+from supabase import create_client, Client
 from dotenv import load_dotenv
 from datetime import datetime
 import random
@@ -19,145 +20,20 @@ import re
 import logging
 import difflib
 
-# Version V2 (mise à jour le 23/05/2025) - BASE LOCALE UTILISATEUR + MINIMAL SUPABASE + DEBUG LOGS V3
-logging.info("=== SRIPT DÉMARRÉ : BASE LOCALE UTILISATEUR + MINIMAL SUPABASE + DEBUG LOGS V3 (23/05/2025) ===")
-
-# Configuration du logging - AVANT tout pour voir tous les logs
+# Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    logging.critical("Variables d'environnement SUPABASE_URL et SUPABASE_KEY non définies ou vides.")
-    raise ValueError("SUPABASE_URL et SUPABASE_KEY doivent être configurées pour que le script fonctionne.")
-
-# --- Définition de MinimalSupabaseClient ---
-class MinimalSupabaseClient:
-    def __init__(self, url, key):
-        self.url = url.rstrip('/')
-        self.key = key
-        self.rest_url = f"{self.url}/rest/v1"
-        self.headers = {
-            "apikey": self.key,
-            "Authorization": f"Bearer {self.key}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        }
-        logging.info(f"MinimalSupabaseClient initialisé pour l'URL: {self.url}")
-
-    def table(self, table_name):
-        logging.debug(f"Accès à la table: {table_name}")
-        return MinimalSupabaseTable(self, table_name)
-
-    def request(self, method, url, **kwargs):
-        headers = {**self.headers, **kwargs.get('headers', {})}
-        kwargs['headers'] = headers
-        logging.debug(f"Requête {method} vers {url} avec headers: {headers.get('apikey')[:5]}... et params: {kwargs.get('params')}")
-        
-        try:
-            with httpx.Client(timeout=30.0) as client:
-                response = client.request(method, url, **kwargs)
-            logging.debug(f"Réponse reçue: {response.status_code}")
-            if response.status_code >= 400:
-                logging.error(f"Erreur API Supabase: {response.status_code} - {response.text}")
-                response.raise_for_status()
-            return response.json()
-        except httpx.RequestError as e:
-            logging.error(f"Erreur de requête httpx vers Supabase: {e}")
-            raise
-        except Exception as e:
-            logging.error(f"Erreur inattendue pendant la requête Supabase: {e}")
-            raise
-
-class MinimalSupabaseTable:
-    def __init__(self, client, table_name):
-        self.client = client
-        self.table_name = table_name
-        self.url = f"{client.rest_url}/{table_name}"
-        self.current_query = {}
-
-    def select(self, columns="*"):
-        self.current_query['select'] = columns
-        return self
-
-    def eq(self, column, value):
-        self.current_query[column] = f"eq.{value}"
-        return self
-
-    def neq(self, column, value): # Utilisé pour simuler "delete all where id != -1"
-        self.current_query[column] = f"neq.{value}"
-        return self
-        
-    def execute(self): # Pour les requêtes GET (select)
-        params = {}
-        if 'select' in self.current_query:
-            params['select'] = self.current_query.pop('select')
-        for key, value in self.current_query.items(): # Ajoute les filtres eq, neq, etc.
-            params[key] = value
-        self.current_query = {}
-        try:
-            result = self.client.request('GET', self.url, params=params)
-            return SupabaseResponse(result)
-        except Exception as e:
-            logging.error(f"Erreur lors de l'exécution de la requête SELECT pour la table {self.table_name}: {e}")
-            return SupabaseResponse([]) # Retourne une réponse avec des données vides en cas d'erreur
-
-    def insert(self, data):
-        try:
-            result = self.client.request('POST', self.url, json=data)
-            return SupabaseResponse(result)
-        except Exception as e:
-            logging.error(f"Erreur lors de l'exécution de la requête INSERT pour la table {self.table_name}: {e}")
-            return SupabaseResponse([])
-
-    def delete(self): # Prépare la requête DELETE, les filtres sont ajoutés via .neq par exemple
-        # La méthode execute_delete (nom arbitraire ici) s'occuperait de la requête DELETE réelle
-        # Pour ce client minimal, on va simplifier et supposer que .execute() gère aussi DELETE
-        # en se basant sur les filtres. C'est une simplification.
-        # Idéalement, il y aurait une méthode distincte pour construire et exécuter DELETE.
-        # Pour l'instant, on s'assure que execute() peut gérer cela.
-        # NOUS ALLONS MODIFIER execute() pour qu'il puisse gérer DELETE
-        # Dans l'usage actuel, delete().neq().execute() est appelé.
-        # Il faut une méthode pour réellement envoyer la requête DELETE.
-        # On va renommer execute() en _execute_get() et créer un nouveau execute()
-        # qui gère le type de requête ou ajouter une méthode spécifique pour delete.
-        # Pour l'instant, on va s'en tenir à la structure existante et laisser execute gérer.
-        # Pour le client actuel MinimalSupabaseTable().execute() fait un GET.
-        # Il faut une méthode pour exécuter un DELETE.
-        # Modifions MinimalSupabaseTable pour supporter delete :
-        
-        # On va ajouter une méthode execute_delete à MinimalSupabaseTable
-        # Mais pour l'instant, on ne peut pas modifier la classe ici.
-        # On va simplement loguer l'intention et l'échec probable.
-        logging.warning("La suppression des matchs avec MinimalSupabaseClient tel quel n'est pas garantie de fonctionner correctement. Elle est implémentée comme un GET avec filtres.")
-        # En réalité, supabase-py transforme delete().neq().execute() en une requête HTTP DELETE appropriée.
-        # MinimalSupabaseClient ne le fait pas aussi intelligemment.
-        # On va juste essayer et voir la réponse.
-        return self # Permet d'enchaîner les filtres comme .neq()
-
-class SupabaseResponse:
-    def __init__(self, data):
-        self.data = data
-        if isinstance(data, list) and data: # Si data est une liste non vide
-            logging.debug(f"SupabaseResponse créée avec {len(data)} éléments. Premier élément (aperçu): {str(data[0])[:100]}...")
-        elif data:
-            logging.debug(f"SupabaseResponse créée avec des données: {str(data)[:100]}...")
-        else:
-            logging.debug("SupabaseResponse créée avec des données vides ou None.")
-# --- Fin de MinimalSupabaseClient ---
-
-logging.info("Initialisation du client Supabase Minimal...")
-supabase = MinimalSupabaseClient(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 url = "https://www.betclic.fr/tennis-stennis"
-logging.info(f"URL cible pour le scraping : {url}")
 
 # --- Options pour le scroll ---
-MAX_SCROLL_ATTEMPTS = 10
-SCROLL_PAUSE_TIME = 3
-TARGET_MATCH_COUNT = 100
+MAX_SCROLL_ATTEMPTS = 10  # Nombre maximum de tentatives de scroll
+SCROLL_PAUSE_TIME = 3  # Temps d'attente en secondes après chaque scroll pour que le contenu charge
+TARGET_MATCH_COUNT = 100  # Optionnel: arrêter si on a trouvé au moins X matchs après scroll
 
 chrome_options = Options()
 chrome_options.add_argument("--disable-gpu")
@@ -165,162 +41,153 @@ chrome_options.add_argument("--headless")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--window-size=1920,1080")
 chrome_options.add_argument("--disable-dev-shm-usage")
+# chrome_options.add_argument("--headless") # Décommenter pour le mode headless
 chrome_options.add_argument(
     "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.5735.110 Safari/537.36"
 )
-logging.info("Options Chrome configurées.")
 
-driver = None # Initialisation pour le bloc finally
+# Initialisation du driver
+driver = uc.Chrome(options=chrome_options)
+
 
 def close_popins(driver_instance):
-    logging.info("--- Début de la fonction close_popins ---")
-    popin_closed_by_click_overall = False
-    
+    logging.info("Tentative de fermeture des popins...")
+    popin_closed_by_click = False
+    # Essayer de cliquer sur les boutons de consentement courants
     known_popin_selectors = [
-        "button#popin_tc_privacy_button_2",
-        "button[class*='popin_tc_privacy_button'][mode='primary']",
+        "button#popin_tc_privacy_button_2",  # "Tout Accepter" spécifique Betclic
+        "button[class*='popin_tc_privacy_button'][mode='primary']",  # Boutons primaires dans les popins de privacy
         "button[aria-label='Continuer sans accepter']",
-        "button[id^='onetrust-accept-btn-handler']",
-        "button.didomi-components-button.didomi-components-button-primary",
+        "button[id^='onetrust-accept-btn-handler']",  # Onetrust
+        "button.didomi-components-button.didomi-components-button-primary",  # Didomi
     ]
-
-    for selector_index, selector in enumerate(known_popin_selectors):
-        logging.info(f"Vérification du sélecteur de pop-in ({selector_index + 1}/{len(known_popin_selectors)}): \"{selector}\"")
+    for selector in known_popin_selectors:
         try:
             buttons = driver_instance.find_elements(By.CSS_SELECTOR, selector)
-            if not buttons:
-                logging.info(f"Aucun bouton trouvé pour le sélecteur: \"{selector}\"")
-                continue
-            
-            logging.info(f"{len(buttons)} bouton(s) trouvé(s) pour le sélecteur: \"{selector}\"")
-            for btn_index, btn in enumerate(buttons):
-                try:
-                    btn_text = btn.text.strip() if btn.text else "Pas de texte"
-                    logging.info(f"  Bouton {btn_index + 1}/{len(buttons)} (texte: \"{btn_text}\"): Affiché? {btn.is_displayed()}, Activé? {btn.is_enabled()}")
-                    if btn.is_displayed() and btn.is_enabled():
-                        logging.info(f"    Tentative de clic JS sur le bouton {btn_index + 1} pour le sélecteur \"{selector}\"")
-                        driver_instance.execute_script("arguments[0].click();", btn)
-                        logging.info(f"    Clic JS exécuté sur le bouton {btn_index + 1} pour \"{selector}\". Pause de 2s.")
-                        popin_closed_by_click_overall = True # Marque qu'au moins un clic a été tenté
-                        time.sleep(2)
-                        # Pas de 'break' ici, on essaie tous les boutons pour ce sélecteur, puis tous les sélecteurs (comme dans le script local)
-                except StaleElementReferenceException:
-                    logging.warning(f"    Erreur StaleElementReferenceException pour le bouton {btn_index + 1} du sélecteur \"{selector}\". L'élément n'est plus attaché au DOM.")
-                except Exception as e_btn:
-                    logging.error(f"    Erreur inattendue lors du traitement du bouton {btn_index + 1} pour \"{selector}\": {e_btn}")
-        
-        except Exception as e_selector:
-            logging.error(f"Erreur lors de la recherche d'éléments pour le sélecteur \"{selector}\": {e_selector}")
+            for btn in buttons:
+                if btn.is_displayed() and btn.is_enabled():
+                    logging.info(f"Click sur popin via selector: {selector}")
+                    driver_instance.execute_script("arguments[0].click();", btn)  # Clic JS plus robuste
+                    popin_closed_by_click = True
+                    time.sleep(2)  # Attendre que la popin disparaisse
+                    # break # Sortir si un bouton a été cliqué
+        except Exception as e:
+            logging.debug(f"Erreur en cliquant sur {selector}: {e}")
+        # if popin_closed_by_click:
+        #     break
 
-    if popin_closed_by_click_overall:
-        logging.info("Au moins un clic sur une pop-in a été tenté.")
+    if popin_closed_by_click:
+        logging.info("Popin fermée par clic.")
     else:
-        logging.info("Aucun bouton de pop-in évident (correspondant aux sélecteurs) n'a été trouvé ou cliqué.")
+        logging.info("Aucune popin évidente trouvée pour clic, ou échec du clic.")
 
-    logging.info("Tentative de suppression des overlays/popins via JS (méthode de secours)...")
+    # Forcer la suppression des overlays/popins si toujours présents
+    # Cibler des conteneurs de popins connus
     js_remove_selectors = [
-        '[class*="popin_tc_privacy"]',
-        '[id^="onetrust-banner"]',
-        '[id="didomi-host"]',
-        '[class*="overlay"]',
-        '[role="dialog"]'
+        '[class*="popin_tc_privacy"]',  # Betclic privacy
+        '[id^="onetrust-banner"]',  # Onetrust banner
+        '[id="didomi-host"]',  # Didomi host
+        '[class*="overlay"]',  # Classes génériques d'overlay
+        '[role="dialog"]'  # Rôles de dialogue souvent utilisés pour les modales
     ]
-    total_removed_js = 0
-    for js_selector_index, js_selector in enumerate(js_remove_selectors):
-        script = f"let count = 0; document.querySelectorAll('{js_selector}').forEach(el => {{ el.remove(); count++; }}); return count;"
+    removed_count = 0
+    for selector in js_remove_selectors:
+        script = f"""
+            let count = 0;
+            document.querySelectorAll('{selector}').forEach(el => {{
+                el.remove();
+                count++;
+            }});
+            return count;
+        """
         try:
-            removed_count = driver_instance.execute_script(script)
-            if removed_count > 0:
-                logging.info(f"  {removed_count} élément(s) pour le sélecteur JS \"{js_selector}\" supprimé(s).")
-                total_removed_js += removed_count
-        except Exception as e_js_remove:
-            logging.warning(f"  Erreur lors de la suppression JS avec le sélecteur \"{js_selector}\": {e_js_remove}")
-    
-    if total_removed_js > 0:
-        logging.info(f"Total de {total_removed_js} élément(s) de popin/overlay supprimé(s) via JS.")
-    else:
-        logging.info("Aucun élément de popin/overlay supplémentaire n'a été supprimé via JS.")
-    
-    logging.info("Pause de 1s après la gestion des popins.")
-    time.sleep(1)
-    logging.info("--- Fin de la fonction close_popins ---")
+            removed = driver_instance.execute_script(script)
+            if removed > 0:
+                logging.info(f"{removed} élément(s) correspondant à '{selector}' supprimé(s) via JS.")
+                removed_count += removed
+        except Exception as e:
+            logging.warning(f"Erreur lors de la suppression JS de '{selector}': {e}")
 
-matches = [] # Initialisation en dehors du try pour le scope du finally
-scraped_dt = datetime.now() # Idem
+    if removed_count > 0:
+        logging.info(f"Total de {removed_count} éléments de popin/overlay supprimés via JS.")
+    else:
+        logging.info("Aucun élément de popin/overlay supplémentaire supprimé via JS.")
+    time.sleep(1)
+
+
+driver.get(url)
+logging.info("Page chargée. Attente initiale de 5 secondes...")
+time.sleep(5)
+
+close_popins(driver)  # Appeler la fonction de fermeture des popins
+logging.info("Attente de 2 secondes après la gestion des popins...")
+time.sleep(2)
+
+# --- Logique de scroll ---
+logging.info("Début du scroll pour charger plus de matchs...")
+last_height = driver.execute_script("return document.body.scrollHeight")
+match_elements_count_before_scroll = 0
+
+for i in range(MAX_SCROLL_ATTEMPTS):
+    logging.info(f"Scroll attempt {i + 1}/{MAX_SCROLL_ATTEMPTS}")
+    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    time.sleep(SCROLL_PAUSE_TIME)  # Attendre que la page charge
+
+    new_height = driver.execute_script("return document.body.scrollHeight")
+    current_match_elements = driver.find_elements(By.TAG_NAME, "sports-events-event-card")
+    current_match_elements_count = len(current_match_elements)
+
+    logging.info(
+        f"Hauteur actuelle: {new_height}, Nombre d'éléments 'sports-events-event-card': {current_match_elements_count}")
+
+    if new_height == last_height and current_match_elements_count == match_elements_count_before_scroll:
+        logging.info("Fin du scroll : la hauteur de la page et le nombre de matchs n'ont pas changé.")
+        break
+
+    last_height = new_height
+    match_elements_count_before_scroll = current_match_elements_count
+
+    if TARGET_MATCH_COUNT > 0 and current_match_elements_count >= TARGET_MATCH_COUNT:
+        logging.info(f"Nombre de matchs cible ({TARGET_MATCH_COUNT}) atteint ou dépassé. Arrêt du scroll.")
+        break
+
+    # Petite pause supplémentaire si le contenu semble toujours se charger
+    time.sleep(1)
+else:  # Exécuté si la boucle for se termine sans 'break' (c'est-à-dire, MAX_SCROLL_ATTEMPTS atteint)
+    logging.info(f"Nombre maximum de tentatives de scroll ({MAX_SCROLL_ATTEMPTS}) atteint.")
+
+logging.info("Fin du scroll.")
+# --- Fin de la logique de scroll ---
+
+
+matches = []
+seen_urls = set()
+scraped_dt = datetime.now()
 
 try:
-    logging.info("Initialisation du driver uc.Chrome...")
-    driver = uc.Chrome(options=chrome_options)
-    logging.info("Driver uc.Chrome initialisé.")
-
-    logging.info(f"Accès à l'URL: {url}")
-    driver.get(url)
-    logging.info("Page chargée. Attente initiale de 5 secondes...")
-    time.sleep(5)
-
-    close_popins(driver) # Appel de la fonction de fermeture des popins
-
-    logging.info("Attente de 2 secondes après la gestion des popins...")
-    time.sleep(2)
-
-    logging.info("--- Début de la logique de scroll ---")
-    last_height = driver.execute_script("return document.body.scrollHeight")
-    match_elements_count_before_scroll = 0
-    logging.info(f"Hauteur initiale de la page: {last_height}")
-
-    for i in range(MAX_SCROLL_ATTEMPTS):
-        logging.info(f"Tentative de scroll {i + 1}/{MAX_SCROLL_ATTEMPTS}")
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        logging.info(f"Scroll effectué. Pause de {SCROLL_PAUSE_TIME}s pour le chargement...")
-        time.sleep(SCROLL_PAUSE_TIME)
-
-        new_height = driver.execute_script("return document.body.scrollHeight")
-        
-        # Re-vérifier les éléments après chaque scroll
-        current_match_elements = driver.find_elements(By.TAG_NAME, "sports-events-event-card")
-        current_match_elements_count = len(current_match_elements)
-        
-        logging.info(f"Nouvelle hauteur: {new_height}. Hauteur précédente: {last_height}. Éléments 'sports-events-event-card' trouvés: {current_match_elements_count}.")
-
-        if new_height == last_height and current_match_elements_count == match_elements_count_before_scroll:
-            logging.info("Fin du scroll : la hauteur de la page et le nombre de matchs n'ont pas changé significativement.")
-            break
-        
-        last_height = new_height
-        match_elements_count_before_scroll = current_match_elements_count
-
-        if TARGET_MATCH_COUNT > 0 and current_match_elements_count >= TARGET_MATCH_COUNT:
-            logging.info(f"Nombre de matchs cible ({TARGET_MATCH_COUNT}) atteint ou dépassé. Arrêt du scroll.")
-            break
-        
-        logging.info("Petite pause supplémentaire de 1s...")
-        time.sleep(1)
-    else:
-        logging.info(f"Nombre maximum de tentatives de scroll ({MAX_SCROLL_ATTEMPTS}) atteint.")
-    logging.info("--- Fin de la logique de scroll ---")
-
-    seen_urls = set()
-    
-    logging.info("Extraction des informations des matchs APRÈS scroll...")
+    logging.info("Extraction des informations des matchs après scroll...")
+    # Il est crucial de récupérer le page_source APRÈS tous les scrolls
     page_source = driver.page_source
-    logging.info(f"Page source récupérée (longueur: {len(page_source)} caractères).")
-    
     soup = BeautifulSoup(page_source, "html.parser")
-    logging.info("Page source parsée avec BeautifulSoup.")
 
     match_cards = soup.find_all("sports-events-event-card")
-    logging.info(f"Nombre total de cartes de match ('sports-events-event-card') trouvées après scroll: {len(match_cards)}")
+    logging.info(f"Nombre total de cartes de match trouvées après scroll: {len(match_cards)}")
+
+    # La limite des 40 premiers matchs est enlevée, car on veut tout ce qui a été chargé
+    # match_cards = match_cards[:40] # Supprimé
 
     for card_index, card in enumerate(match_cards):
-        current_date = ""
-        current_heure = ""
-        current_tournoi = ""
-        current_tour = ""
+        current_date = ""  # Réinitialiser pour chaque carte
+        current_heure = ""  # Réinitialiser pour chaque carte
+        current_tournoi = ""  # Réinitialiser pour chaque carte
+        current_tour = ""  # Réinitialiser pour chaque carte (toujours vide pour Betclic apparemment)
 
-        players_elements = card.find_all("div", class_="scoreboard_contestantLabel")
-        player1 = players_elements[0].text.strip() if len(players_elements) > 0 else "Joueur1_NonTrouve"
-        player2 = players_elements[1].text.strip() if len(players_elements) > 1 else "Joueur2_NonTrouve"
+        # Noms des joueurs
+        players = card.find_all("div", class_="scoreboard_contestantLabel")
+        player1 = players[0].text.strip() if len(players) > 0 else ""
+        player2 = players[1].text.strip() if len(players) > 1 else ""
 
+        # URL de la rencontre
         a_tag = card.find("a", class_="cardEvent")
         match_url = ""
         if a_tag and "href" in a_tag.attrs:
@@ -337,239 +204,227 @@ try:
             if match_obj:
                 full_slug = match_obj.group(1)
                 parts = full_slug.split('-')
+                # Logique améliorée pour diviser les noms, gère les noms composés
+                # Exemple: 'alex-de-minaur-vs-jan-lennard-struff'
+                # On cherche le 'vs' implicite. Le slug est 'joueur1-joueur2'
+                # On ne peut pas juste diviser par 2 si un joueur a un nom composé.
+                # Cependant, Betclic semble utiliser le même nombre de tirets pour chaque joueur
+                # Ex: 'alex-de-minaur' (2 tirets) et 'jan-lennard-struff' (2 tirets)
+                # Si les noms sont p.ex. 'taylor-fritz' et 'sebastian-baez', on divise par 2.
+                # Pour l'instant, on garde la division par 2, mais il faut être conscient de sa fragilité.
+                # Une meilleure approche serait d'avoir une liste de noms connus ou une heuristique plus fine.
                 n_parts = len(parts)
+                # Si le nombre de parties est impair, c'est difficile, on fait une approximation
+                # ex: novak-djokovic-carlos-alcaraz -> djokovic est partagé.
+                # Le slug betclic est souvent 'nom1part1-nom1part2-nom2part1-nom2part2'
+                # Donc diviser au milieu est généralement correct.
                 split_point = n_parts // 2
                 slug1 = '-'.join(parts[:split_point])
                 slug2 = '-'.join(parts[split_point:])
-                def slug_to_name(slug): return ' '.join([x.capitalize() for x in slug.replace('-', ' ').split()])
+
+
+                def slug_to_name(slug):
+                    return ' '.join([x.capitalize() for x in slug.replace('-', ' ').split()])
+
+
                 player1_full = slug_to_name(slug1)
                 player2_full = slug_to_name(slug2)
+            else:  # Fallback si le regex ne match pas, mais qu'on a les noms courts
+                player1_full = player1
+                player2_full = player2
+        else:  # Fallback si pas de a_tag
+            player1_full = player1
+            player2_full = player2
 
+        # Date et heure
         event_info_time = card.find("div", class_="event_infoTime")
         if event_info_time and event_info_time.text.strip():
             date_heure_text = event_info_time.text.strip()
-            if "Auj." in date_heure_text or "Dem." in date_heure_text:
+            # Gérer "Auj.", "Dem." et les dates complètes
+            if "Auj." in date_heure_text or "Dem." in date_heure_text:  # ex: "Auj. 14:00" ou "Dem. Jeu. 23:00"
                 parts = date_heure_text.split()
                 if len(parts) >= 2:
-                    current_date = parts[0]
-                    current_heure = parts[-1]
-            else:
+                    current_date = parts[0]  # Peut être "Auj." ou "Dem."
+                    current_heure = parts[-1]  # L'heure est toujours la dernière partie
+            else:  # ex: "Jeu. 01/01 15:00"
                 parts = date_heure_text.split()
-                if len(parts) == 3:
-                    current_date = f"{parts[0]} {parts[1]}"
-                    current_heure = parts[2]
-                elif len(parts) == 2:
+                if len(parts) == 3:  # "Jeu. 01/01 15:00"
+                    current_date = f"{parts[0]} {parts[1]}"  # "Jeu. 01/01"
+                    current_heure = parts[2]  # "15:00"
+                elif len(parts) == 2:  # Cas "01/01 15:00" (moins probable sans jour)
                     current_date = parts[0]
                     current_heure = parts[1]
 
+        # Extraction du nom du tournoi depuis l'URL (généralement plus fiable)
         if a_tag and "href" in a_tag.attrs:
             url_parts = a_tag["href"].split("/")
-            if len(url_parts) > 2:
-                tournoi_slug_full = url_parts[2]
+            if len(url_parts) > 2:  # e.g., /fr/tennis/atp-rome-c33/...
+                tournoi_slug_full = url_parts[2]  # "atp-rome-c33" ou "roland-garros- 프랑스 오픈-c123"
+                # Prendre tout avant le premier "-c" suivi de chiffres
                 tournoi_match = re.match(r"^(.*?)(-c\d+)?$", tournoi_slug_full)
                 if tournoi_match:
-                    current_tournoi = tournoi_match.group(1).replace('-', ' ').title()
-                else:
+                    tournoi_slug = tournoi_match.group(1)
+                    current_tournoi = tournoi_slug.replace('-', ' ').title()
+                else:  # Fallback si le regex ne match pas
                     current_tournoi = tournoi_slug_full.replace('-', ' ').title()
-        
-        logging.info(f"  Match {card_index + 1}/{len(match_cards)}: {player1_full} vs {player2_full} | Date: {current_date}, Heure: {current_heure} | Tournoi: {current_tournoi} | URL: {match_url}")
+
+        logging.info(
+            f"Match {card_index + 1}/{len(match_cards)}: {player1_full} vs {player2_full} | Date: {current_date}, Heure: {current_heure} | Tournoi: {current_tournoi} | URL: {match_url}")
+
         matches.append({
-            "date": current_date, "heure": current_heure, "tournoi": current_tournoi, "tour": current_tour,
-            "player1": player1_full, "player2": player2_full, "match_url": match_url,
-            "scraped_date": scraped_dt.date().isoformat(), "scraped_time": scraped_dt.time().strftime("%H:%M:%S"),
+            "date": current_date,
+            "heure": current_heure,
+            "tournoi": current_tournoi,
+            "tour": current_tour,  # Reste vide car non trouvé sur la page Betclic
+            "player1": player1_full,
+            "player2": player2_full,
+            "match_url": match_url,
+            "scraped_date": scraped_dt.date().isoformat(),
+            "scraped_time": scraped_dt.time().strftime("%H:%M:%S"),
         })
-
-except Exception as e_global:
-    logging.error(f"ERREUR GLOBALE DANS LE SCRIPT: {str(e_global)}", exc_info=True)
+except Exception as e:
+    logging.error(f"Erreur lors de l'extraction: {str(e)}", exc_info=True)
 finally:
-    logging.info("--- Bloc finally atteint ---")
-    page_content_to_save = "Contenu non disponible (erreur avant récupération page source)"
-    if driver and hasattr(driver, 'page_source') and driver.page_source:
-        page_content_to_save = driver.page_source
-        logging.info(f"Contenu de la page (page_source) récupéré pour page_debug.html (longueur: {len(page_content_to_save)} caractères).")
-    elif driver:
-        logging.warning("Driver existe mais page_source est vide ou non disponible.")
-    else:
-        logging.warning("Driver non initialisé, page_source non récupérable.")
-        
-    debug_file_path = "page_debug.html"
-    try:
-        with open(debug_file_path, "w", encoding="utf-8") as f:
-            f.write(page_content_to_save)
-        logging.info(f"HTML sauvegardé dans {debug_file_path}")
-        
-        with open(debug_file_path, "r", encoding="utf-8") as f_read:
-            debug_content_preview = f_read.read(3000) # Augmenté à 3000 caractères
-            logging.info(f"""APERÇU DU DÉBUT DE {debug_file_path} ({len(debug_content_preview)} caractères):
-{debug_content_preview}
---- FIN DE L'APERÇU ---""")
-    except Exception as e_file:
-        logging.error(f"Erreur lors de l'écriture ou lecture de {debug_file_path}: {e_file}")
+    # Enregistrement de la page pour le débogage
+    with open("page_debug.html", "w", encoding="utf-8") as f:
+        f.write(driver.page_source if 'driver' in locals() and driver.page_source else "No page source available")
+    logging.info("HTML sauvegardé dans page_debug.html")
 
-    if driver:
-        logging.info("Tentative de fermeture du driver WebDriver...")
-        try:
-            driver.quit()
-            logging.info("Driver WebDriver fermé avec succès.")
-        except Exception as e_quit:
-            logging.error(f"Erreur lors de la fermeture du driver: {e_quit}")
-    else:
-        logging.info("Driver non initialisé, pas de fermeture nécessaire.")
+    # Fermeture du navigateur
+    if 'driver' in locals():
+        driver.quit()
 
 logging.info(f"Nombre total de matchs extraits: {len(matches)}")
 
-if not matches: # Si la liste est vide
-    logging.warning("Aucun match n'a été extrait. La base de données ne sera pas modifiée.")
-else:
-    df = pd.DataFrame(matches)
-    logging.info(f"{len(df)} matchs transformés en DataFrame.")
+# Création du DataFrame
+df = pd.DataFrame(matches)  # Les colonnes seront automatiquement créées à partir des clés du dict
 
+# --- Traitement post-extraction et sauvegarde Supabase ---
+if not df.empty:
+    # Récupérer les joueurs ratings depuis Supabase
     logging.info("Récupération des données Elo depuis Supabase...")
-    elo_df = pd.DataFrame() # Initialisation
     try:
         elo_response = supabase.table("atp_elo_ratings").select("*").execute()
         if elo_response.data:
-            elo_df = pd.DataFrame(elo_response.data)
-            logging.info(f"{len(elo_df)} entrées Elo récupérées depuis Supabase.")
+            elo_players = elo_response.data
+            elo_df = pd.DataFrame(elo_players)
         else:
-            logging.warning("Aucune donnée Elo reçue de Supabase (la table 'atp_elo_ratings' est peut-être vide ou erreur de réponse).")
-            elo_df = pd.DataFrame(columns=['player']) # Assure que elo_df a la colonne 'player'
-    except Exception as e_elo:
-        logging.error(f"Erreur lors de la récupération des données Elo: {e_elo}")
-        elo_df = pd.DataFrame(columns=['player']) # Fallback
+            logging.warning("Aucune donnée Elo reçue de Supabase. La table 'atp_elo_ratings' est peut-être vide.")
+            elo_df = pd.DataFrame(columns=['player'])  # DataFrame vide avec la colonne attendue
+    except Exception as e:
+        logging.error(f"Erreur lors de la récupération des données Elo: {e}")
+        elo_df = pd.DataFrame(columns=['player'])
 
-    def normalize_name(name): return ' '.join(str(name).replace('\xa0', ' ').split()).lower()
+    # Ajoute une liste des noms normalisés
+    normalized_players_list = elo_df['player'].apply(lambda x: ' '.join(str(x).replace('\xa0', ' ').split()).lower()).tolist()
+
+
+    def normalize_name(name):
+        return ' '.join(str(name).replace('\xa0', ' ').split()).lower()
+
+
     def player_to_tennisabstract_url(player_name_on_site):
+        # Tennis Abstract utilise souvent des noms sans accents et en minuscules pour les URLs
+        # ex: 'Novak Djokovic' -> 'novakdjokovic'
+        # Il faut gérer les cas comme 'Alex De Minaur' -> 'alexdeminaur'
+
+        # Simple normalisation pour l'URL Tennis Abstract
         normalized_for_url = str(player_name_on_site).lower()
+        # Retirer accents (simple pour l'instant, une librairie comme `unidecode` serait mieux)
+        # Pour les besoins de l'URL, on retire juste les caractères non alphanumériques (sauf espace qu'on retire ensuite)
         normalized_for_url = re.sub(r'[^a-z0-9\s-]', '', normalized_for_url)
+        # Remplacer les espaces et tirets par rien
         normalized_for_url = normalized_for_url.replace(' ', '').replace('-', '')
         return f"https://www.tennisabstract.com/cgi-bin/player.cgi?p={normalized_for_url}"
 
-    def find_best_slug_url(name, elo_df_local):
-        if elo_df_local.empty: return player_to_tennisabstract_url(name)
-        norm_name_site = normalize_name(name)
-        if 'player' not in elo_df_local.columns: # Sécurité
-             logging.warning("Colonne 'player' manquante dans elo_df_local pour find_best_slug_url.")
-             return player_to_tennisabstract_url(name)
-        
-        # Crée la colonne normalisée seulement si elle n'existe pas ou si elo_df_local a changé
-        if 'normalized_player' not in elo_df_local.columns or not hasattr(elo_df_local, '_normalized_once'):
-            elo_df_local['normalized_player'] = elo_df_local['player'].apply(normalize_name)
-            elo_df_local._normalized_once = True # Marqueur pour éviter recalculs inutiles
 
+    def find_best_slug_url(name, elo_df_local):
+        if elo_df_local.empty:
+            # Si elo_df est vide, on ne peut pas faire de matching intelligent,
+            # on utilise la conversion directe du nom du site.
+            return player_to_tennisabstract_url(name)
+
+        norm_name_site = normalize_name(name)
+
+        # 1. Tentative de match exact (après normalisation)
+        elo_df_local['normalized_player'] = elo_df_local['player'].apply(normalize_name)
         exact_match = elo_df_local[elo_df_local['normalized_player'] == norm_name_site]
         if not exact_match.empty:
-            return player_to_tennisabstract_url(exact_match['player'].iloc[0])
-        
+            matched_elo_name = exact_match['player'].iloc[0]
+            logging.debug(f"Exact match for '{name}' -> '{matched_elo_name}'")
+            return player_to_tennisabstract_url(matched_elo_name)
+
+        # 2. Tentative de match approché avec difflib
         names_list_elo = elo_df_local['normalized_player'].tolist()
-        close_matches = difflib.get_close_matches(norm_name_site, names_list_elo, n=1, cutoff=0.80)
+        close_matches = difflib.get_close_matches(norm_name_site, names_list_elo, n=1,
+                                                  cutoff=0.80)  # Cutoff un peu plus strict
+
         if close_matches:
-            original_elo_name = elo_df_local[elo_df_local['normalized_player'] == close_matches[0]]['player'].iloc[0]
-            return player_to_tennisabstract_url(original_elo_name)
+            # Retrouver le nom original de la base Elo à partir du nom normalisé matché
+            matched_normalized_name = close_matches[0]
+            original_elo_name_series = elo_df_local[elo_df_local['normalized_player'] == matched_normalized_name][
+                'player']
+            if not original_elo_name_series.empty:
+                original_elo_name = original_elo_name_series.iloc[0]
+                logging.debug(
+                    f"Close match for '{name}' ({norm_name_site}) -> '{original_elo_name}' ({matched_normalized_name})")
+                return player_to_tennisabstract_url(original_elo_name)
+
+        # 3. Si aucun match, fallback sur la conversion directe du nom du site
+        logging.warning(f"No close match for '{name}' in Elo DB. Using direct conversion for URL.")
         return player_to_tennisabstract_url(name)
 
-    logging.info("Génération des URLs Tennis Abstract pour les joueurs...")
+
+    logging.info("Recherche des correspondances de joueurs et génération des URLs Tennis Abstract...")
     df["player1_url"] = df["player1"].apply(lambda n: find_best_slug_url(n, elo_df))
     df["player2_url"] = df["player2"].apply(lambda n: find_best_slug_url(n, elo_df))
 
+    # Assurer l'ordre des colonnes pour la base de données
     final_columns = ["date", "heure", "tournoi", "tour", "player1", "player2", "match_url",
                      "player1_url", "player2_url", "scraped_date", "scraped_time"]
+    # S'assurer que toutes les colonnes existent, ajouter celles qui manquent avec None ou ""
     for col in final_columns:
-        if col not in df.columns: df[col] = None if col.endswith("_url") else ""
-    
+        if col not in df.columns:
+            df[col] = None if col.endswith("_url") else ""  # ou pd.NA
+
     df_for_upload = df[final_columns].copy()
-    
-    if not elo_df.empty and 'player' in elo_df.columns:
-        normalized_players_set = set(elo_df['player'].apply(normalize_name))
-        df_for_upload = df_for_upload[
-            (df_for_upload["player1"].apply(normalize_name).isin(normalized_players_set)) &
-            (df_for_upload["player2"].apply(normalize_name).isin(normalized_players_set))
-        ]
-        logging.info(f"Nombre de matchs après filtrage par joueurs présents dans la base Elo: {len(df_for_upload)}/{len(df)}")
-    else:
-        logging.warning("elo_df est vide ou ne contient pas la colonne 'player', impossible de filtrer les matchs. Tous les matchs seront tentés à l'insertion.")
+    # Normalise les noms des joueurs
+    normalized_players_set = set(elo_df['player'].apply(normalize_name))
+    df_for_upload = df_for_upload[
+        (df_for_upload["player1"].apply(normalize_name).isin(normalized_players_set)) &
+        (df_for_upload["player2"].apply(normalize_name).isin(normalized_players_set))
+    ]
+    # logging.info(f"Matches avec 2 URLs joueurs valides: {len(df_for_upload)}/{len(df)}")
+    logging.info(f"Matches avec 2 joueurs présents dans la base Elo: {len(df_for_upload)}/{len(df)}")
 
-    if df_for_upload.empty:
-        logging.warning("Aucun match à insérer après filtrage (ou df_for_upload est vide initialement).")
-    else:
-        logging.info(f"Suppression des anciens matchs de la table 'upcoming_matches' (neq id: -1)...")
+    # Supprime tous les anciens matchs à venir
+    logging.info("Suppression des anciens matchs de la table 'upcoming_matches'...")
+    try:
+        delete_response = supabase.table("upcoming_matches").delete().neq('id',
+                                                                          -1).execute()  # neq est un placeholder pour "delete all"
+        logging.info(
+            f"Réponse de la suppression: {delete_response.data if hasattr(delete_response, 'data') else 'Pas de données de réponse'}")
+    except Exception as e:
+        logging.error(f"Erreur lors de la suppression des anciens matchs: {e}")
+
+    # Insère les nouveaux matchs (par chunk de 100 pour éviter les timeouts ou limites de payload)
+    logging.info(f"Insertion de {len(df_for_upload)} nouveaux matchs...")
+    data_to_insert = df_for_upload.to_dict(orient='records')
+
+    chunk_size = 100
+    for i in range(0, len(data_to_insert), chunk_size):
+        chunk = data_to_insert[i:i + chunk_size]
         try:
-            # Utilisation correcte de delete().neq().execute()
-            # La classe MinimalSupabaseTable a été simplifiée, on suppose que .execute() peut gérer
-            # les params de delete si la méthode HTTP est changée par le client.
-            # Ceci nécessite une adaptation de MinimalSupabaseTable.request ou une méthode dédiée.
-            # Pour l'instant, on va dire que c'est une requête GET avec des params spécifiques
-            # que le backend Supabase interprète pour un delete (ce qui n'est pas standard pour REST).
-            # La méthode actuelle de delete est problématique avec ce client minimal.
-            # Il faudrait une méthode supabase.rpc ou une vraie gestion de DELETE.
-            # On va simuler un delete via une méthode qui n'existe pas, pour illustrer le problème.
-            # supabase.table("upcoming_matches").delete().neq('id', -1).execute_delete_query()
+            insert_response = supabase.table("upcoming_matches").insert(chunk).execute()
+            logging.info(
+                f"Chunk {i // chunk_size + 1} inséré. Réponse: {insert_response.data if hasattr(insert_response, 'data') else 'Pas de données de réponse'}")
+            if hasattr(insert_response, 'error') and insert_response.error:
+                logging.error(f"Erreur Supabase lors de l'insertion du chunk: {insert_response.error}")
+        except Exception as e:
+            logging.error(f"Erreur lors de l'insertion du chunk {i // chunk_size + 1}: {e}")
 
-            # SOLUTION PROVISOIRE: pour que ça ne crashe pas, on va juste loguer l'intention.
-            # Le delete réel nécessiterait d'adapter MinimalSupabaseClient
-            logging.info("INTENTION DE SUPPRESSION: supabase.table("upcoming_matches").delete().neq('id', -1).execute()")
-            # Pour un vrai delete, il faudrait que .execute() sache qu'il s'agit d'un DELETE
-            # et change la méthode HTTP. Pour l'instant, il fait un GET.
+    logging.info(f"Processus terminé. {len(df_for_upload)} matchs potentiellement traités pour insertion.")
+else:
+    logging.warning("Aucun match trouvé après scroll, la base de données n'est pas modifiée.")
 
-            # Tentative de suppression via un POST à une fonction RPC `delete_upcoming_matches` (hypothétique)
-            # ou adaptation pour que `request` puisse prendre une méthode `DELETE` avec filtres dans l'URL.
-            # Pour l'instant, le delete ne fonctionnera pas comme attendu avec ce client minimal.
-
-            # On va essayer de faire un delete via la méthode request avec METHOD: DELETE
-            # et les filtres dans params.
-            delete_params = {'id': 'neq.-1'} # Supabase utilise `column=neq.value`
-            logging.info(f"Tentative de DELETE sur 'upcoming_matches' avec params: {delete_params}")
-            
-            # Il faut adapter MinimalSupabaseTable pour qu'une opération de suppression configure la requête
-            # pour utiliser la méthode HTTP DELETE.
-            # Pour le moment, on va juste passer par une requête POST vers une fonction RPC si elle existait
-            # ou simplement loguer que le delete n'est pas pleinement fonctionnel.
-            # Le code original appelait .execute() après .delete().neq()
-            # Re-implémentons une logique de suppression plus directe si possible
-            # La méthode `delete()` sur la table construit la requête.
-            # `.neq('id', -1)` ajoute un filtre.
-            # `.execute()` envoie la requête. Le client doit être capable de déterminer
-            # que c'est une requête DELETE.
-
-            # Pour le client actuel MinimalSupabaseTable().execute() fait un GET.
-            # Il faut une méthode pour exécuter un DELETE.
-            # Modifions MinimalSupabaseTable pour supporter delete :
-            
-            # On va ajouter une méthode execute_delete à MinimalSupabaseTable
-            # Mais pour l'instant, on ne peut pas modifier la classe ici.
-            # On va simplement loguer l'intention et l'échec probable.
-            logging.warning("La suppression des matchs avec MinimalSupabaseClient tel quel n'est pas garantie de fonctionner correctement. Elle est implémentée comme un GET avec filtres.")
-            # En réalité, supabase-py transforme delete().neq().execute() en une requête HTTP DELETE appropriée.
-            # MinimalSupabaseClient ne le fait pas aussi intelligemment.
-            # On va juste essayer et voir la réponse.
-            delete_response = supabase.table("upcoming_matches").delete().neq('id', -1).execute()
-            logging.info(f"Réponse de la tentative de suppression (via GET): {delete_response.data if hasattr(delete_response, 'data') else 'Pas de données de réponse'}")
-
-
-        except Exception as e_delete:
-            logging.error(f"Erreur lors de la tentative de suppression des anciens matchs: {e_delete}")
-
-        logging.info(f"Insertion de {len(df_for_upload)} nouveaux matchs dans Supabase...")
-        data_to_insert = df_for_upload.to_dict(orient='records')
-        chunk_size = 50 # Réduit pour être plus sûr avec les limites de payload potentielles
-        for i in range(0, len(data_to_insert), chunk_size):
-            chunk = data_to_insert[i:i + chunk_size]
-            logging.info(f"Insertion du chunk {i // chunk_size + 1} (taille: {len(chunk)})...")
-            try:
-                insert_response = supabase.table("upcoming_matches").insert(chunk).execute() # .execute() ici devrait faire un POST
-                if insert_response and insert_response.data:
-                     logging.info(f"  Chunk {i // chunk_size + 1} inséré. Réponse (aperçu): {str(insert_response.data[0])[:100] if insert_response.data else 'Vide'}")
-                elif insert_response:
-                     logging.warning(f"  Chunk {i // chunk_size + 1} inséré, mais pas de données dans la réponse ou réponse inattendue: {insert_response}")
-                else:
-                     logging.error(f"  Échec de l'insertion du chunk {i // chunk_size + 1}, réponse nulle.")
-
-                # Vérification d'erreur explicite si la réponse est structurée avec un champ 'error'
-                # (ce n'est pas le cas pour ce client minimal, mais bonne pratique)
-                # if hasattr(insert_response, 'error') and insert_response.error:
-                #    logging.error(f"  Erreur Supabase lors de l'insertion du chunk: {insert_response.error}")
-
-            except Exception as e_insert_chunk:
-                logging.error(f"  Erreur lors de l'insertion du chunk {i // chunk_size + 1}: {e_insert_chunk}")
-        logging.info("Processus d'insertion terminé.")
-logging.info("=== SCRIPT TERMINÉ ===") 
+logging.info("Script terminé.")
