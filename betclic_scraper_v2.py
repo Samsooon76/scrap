@@ -19,7 +19,8 @@ import re
 import logging
 import difflib
 
-# Version V2 (mise à jour le 22/05/2025) - revient à l'extraction HTML qui fonctionne
+# Version V2 (mise à jour le 22/05/2025) - HTML SCRAPING VERSION
+logging.info("=== RUNNING HTML SCRAPING VERSION (22/05/2025) ===")
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
