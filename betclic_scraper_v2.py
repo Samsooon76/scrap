@@ -185,32 +185,32 @@ def close_popins(driver_instance):
     ]
 
     for selector_index, selector in enumerate(known_popin_selectors):
-        logging.info(f"Vérification du sélecteur de pop-in ({selector_index + 1}/{len(known_popin_selectors)}): "{selector}"")
+        logging.info(f"Vérification du sélecteur de pop-in ({selector_index + 1}/{len(known_popin_selectors)}): \"{selector}\"")
         try:
             buttons = driver_instance.find_elements(By.CSS_SELECTOR, selector)
             if not buttons:
-                logging.info(f"Aucun bouton trouvé pour le sélecteur: "{selector}"")
+                logging.info(f"Aucun bouton trouvé pour le sélecteur: \"{selector}\"")
                 continue
             
-            logging.info(f"{len(buttons)} bouton(s) trouvé(s) pour le sélecteur: "{selector}"")
+            logging.info(f"{len(buttons)} bouton(s) trouvé(s) pour le sélecteur: \"{selector}\"")
             for btn_index, btn in enumerate(buttons):
                 try:
                     btn_text = btn.text.strip() if btn.text else "Pas de texte"
-                    logging.info(f"  Bouton {btn_index + 1}/{len(buttons)} (texte: "{btn_text}"): Affiché? {btn.is_displayed()}, Activé? {btn.is_enabled()}")
+                    logging.info(f"  Bouton {btn_index + 1}/{len(buttons)} (texte: \"{btn_text}\"): Affiché? {btn.is_displayed()}, Activé? {btn.is_enabled()}")
                     if btn.is_displayed() and btn.is_enabled():
-                        logging.info(f"    Tentative de clic JS sur le bouton {btn_index + 1} pour le sélecteur "{selector}"")
+                        logging.info(f"    Tentative de clic JS sur le bouton {btn_index + 1} pour le sélecteur \"{selector}\"")
                         driver_instance.execute_script("arguments[0].click();", btn)
-                        logging.info(f"    Clic JS exécuté sur le bouton {btn_index + 1} pour "{selector}". Pause de 2s.")
+                        logging.info(f"    Clic JS exécuté sur le bouton {btn_index + 1} pour \"{selector}\". Pause de 2s.")
                         popin_closed_by_click_overall = True # Marque qu'au moins un clic a été tenté
                         time.sleep(2)
                         # Pas de 'break' ici, on essaie tous les boutons pour ce sélecteur, puis tous les sélecteurs (comme dans le script local)
                 except StaleElementReferenceException:
-                    logging.warning(f"    Erreur StaleElementReferenceException pour le bouton {btn_index + 1} du sélecteur "{selector}". L'élément n'est plus attaché au DOM.")
+                    logging.warning(f"    Erreur StaleElementReferenceException pour le bouton {btn_index + 1} du sélecteur \"{selector}\". L'élément n'est plus attaché au DOM.")
                 except Exception as e_btn:
-                    logging.error(f"    Erreur inattendue lors du traitement du bouton {btn_index + 1} pour "{selector}": {e_btn}")
+                    logging.error(f"    Erreur inattendue lors du traitement du bouton {btn_index + 1} pour \"{selector}\": {e_btn}")
         
         except Exception as e_selector:
-            logging.error(f"Erreur lors de la recherche d'éléments pour le sélecteur "{selector}": {e_selector}")
+            logging.error(f"Erreur lors de la recherche d'éléments pour le sélecteur \"{selector}\": {e_selector}")
 
     if popin_closed_by_click_overall:
         logging.info("Au moins un clic sur une pop-in a été tenté.")
@@ -231,10 +231,10 @@ def close_popins(driver_instance):
         try:
             removed_count = driver_instance.execute_script(script)
             if removed_count > 0:
-                logging.info(f"  {removed_count} élément(s) pour le sélecteur JS "{js_selector}" supprimé(s).")
+                logging.info(f"  {removed_count} élément(s) pour le sélecteur JS \"{js_selector}\" supprimé(s).")
                 total_removed_js += removed_count
         except Exception as e_js_remove:
-            logging.warning(f"  Erreur lors de la suppression JS avec le sélecteur "{js_selector}": {e_js_remove}")
+            logging.warning(f"  Erreur lors de la suppression JS avec le sélecteur \"{js_selector}\": {e_js_remove}")
     
     if total_removed_js > 0:
         logging.info(f"Total de {total_removed_js} élément(s) de popin/overlay supprimé(s) via JS.")
@@ -400,9 +400,9 @@ finally:
         
         with open(debug_file_path, "r", encoding="utf-8") as f_read:
             debug_content_preview = f_read.read(3000) # Augmenté à 3000 caractères
-            logging.info(f\"\"\"APERÇU DU DÉBUT DE {debug_file_path} ({len(debug_content_preview)} caractères):
+            logging.info(f"""APERÇU DU DÉBUT DE {debug_file_path} ({len(debug_content_preview)} caractères):
 {debug_content_preview}
---- FIN DE L\\'APERÇU ---\"\"\")
+--- FIN DE L'APERÇU ---""")
     except Exception as e_file:
         logging.error(f"Erreur lors de l'écriture ou lecture de {debug_file_path}: {e_file}")
 
