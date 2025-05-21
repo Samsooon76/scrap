@@ -40,8 +40,8 @@ COPY betclic_scraper.py .
 COPY player_stats_scraper.py .
 COPY atp_elo_ratings_rows.csv .
 
-# Installer les dépendances Python
-RUN pip install --upgrade pip && pip install -r requirements.txt
+# Installer les dépendances Python avec --no-cache-dir pour éviter les problèmes de cache
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 # Commande par défaut (à remplacer par le script spécifique dans Render)
 CMD ["python", "betclic_scraper.py"] 

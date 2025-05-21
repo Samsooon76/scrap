@@ -7,8 +7,7 @@ import time
 from webdriver_manager.chrome import ChromeDriverManager
 import datetime
 import os
-from supabase import create_client, Client, __version__ as supabase_py_version
-from supabase.lib.client_options import ClientOptions, AuthClientOptions
+import json
 import httpx
 from dotenv import load_dotenv
 import re
@@ -38,34 +37,141 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     logging.critical("SUPABASE_URL and SUPABASE_KEY environment variables are not set or empty.")
     raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set for the script to run.")
 
-# Prepare headers for the custom httpx client
-headers = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "X-Client-Info": f"supabase-py/{supabase_py_version}",
-}
+# Define a minimal Supabase client class that uses httpx directly
+class MinimalSupabaseClient:
+    def __init__(self, url, key):
+        self.url = url.rstrip('/')
+        self.key = key
+        self.rest_url = f"{self.url}/rest/v1"
+        self.headers = {
+            "apikey": self.key,
+            "Authorization": f"Bearer {self.key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        }
+        
+    def table(self, table_name):
+        return MinimalSupabaseTable(self, table_name)
+        
+    def request(self, method, url, **kwargs):
+        # Merge headers
+        headers = {**self.headers, **kwargs.get('headers', {})}
+        kwargs['headers'] = headers
+        
+        # Make request with httpx
+        with httpx.Client(timeout=30.0) as client:
+            response = client.request(method, url, **kwargs)
+            
+        # Check for errors
+        if response.status_code >= 400:
+            logging.error(f"Supabase API error: {response.status_code} - {response.text}")
+            response.raise_for_status()
+            
+        return response.json()
+        
+class MinimalSupabaseTable:
+    def __init__(self, client, table_name):
+        self.client = client
+        self.table_name = table_name
+        self.url = f"{client.rest_url}/{table_name}"
+        self.current_query = {}
+        
+    def select(self, columns="*"):
+        self.current_query['select'] = columns
+        return self
+        
+    def eq(self, column, value):
+        self.current_query[column] = f"eq.{value}"
+        return self
+        
+    def limit(self, count):
+        self.current_query["limit"] = count
+        return self
+        
+    def execute(self):
+        # Build query params
+        params = {}
+        if 'select' in self.current_query:
+            params['select'] = self.current_query.pop('select')
+            
+        # Add other filters
+        for key, value in self.current_query.items():
+            params[key] = value
+            
+        # Reset current query
+        self.current_query = {}
+        
+        # Make request
+        try:
+            result = self.client.request('GET', self.url, params=params)
+            return SupabaseResponse(result)
+        except Exception as e:
+            logging.error(f"Error executing query: {e}")
+            return SupabaseResponse([])
+            
+    def insert(self, data):
+        try:
+            result = self.client.request('POST', self.url, json=data)
+            return SupabaseResponse(result)
+        except Exception as e:
+            logging.error(f"Error inserting data: {e}")
+            return SupabaseResponse([])
+            
+    def delete(self):
+        return self
+        
+class SupabaseResponse:
+    def __init__(self, data):
+        self.data = data
 
-# Use the same default timeout as gotrue-py (dependency of supabase-py)
-default_gotrue_timeout = httpx.Timeout(10.0, connect=5.0)
-
-# Create a custom httpx client instance
-custom_httpx_client = httpx.Client(
-    headers=headers,
-    trust_env=False,  # Explicitly disable proxy environment variables
-    timeout=default_gotrue_timeout
-)
-
-# Configure Supabase client options to use our custom httpx client for auth
-auth_options = AuthClientOptions(http_client=custom_httpx_client)
-client_options = ClientOptions(auth=auth_options)
-
+# Try to use official Supabase client, but fall back to minimal implementation if it fails
 try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY, client_options)
-    logging.info("Supabase client created successfully with custom httpx client (trust_env=False).")
-except Exception as e:
-    # Log the detailed error and re-raise to ensure visibility if creation still fails
-    logging.error(f"Failed to create Supabase client even with custom httpx client: {e}", exc_info=True)
-    raise
+    # Try importing from supabase
+    from supabase import create_client, Client
+    
+    try:
+        # First attempt with standard client
+        logging.info("Attempting to create standard Supabase client...")
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logging.info("Successfully created standard Supabase client.")
+    except Exception as e1:
+        logging.warning(f"Failed to create standard Supabase client: {str(e1)}")
+        
+        try:
+            # Second attempt with custom options
+            logging.info("Attempting with custom client options...")
+            from supabase.lib.client_options import ClientOptions, AuthClientOptions
+            import httpx
+            
+            # Create client options with no proxy
+            custom_httpx_client = httpx.Client(
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}"
+                },
+                trust_env=False,
+                timeout=10.0
+            )
+            
+            # Configure options
+            auth_options = AuthClientOptions(http_client=custom_httpx_client)
+            client_options = ClientOptions(auth=auth_options)
+            
+            # Try creating client with options
+            supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY, client_options)
+            logging.info("Successfully created Supabase client with custom options.")
+        except Exception as e2:
+            logging.warning(f"Failed to create Supabase client with custom options: {str(e2)}")
+            
+            # Final fallback
+            logging.info("Falling back to minimal Supabase client implementation...")
+            supabase = MinimalSupabaseClient(SUPABASE_URL, SUPABASE_KEY)
+            logging.info("Using minimal Supabase client implementation.")
+except ImportError:
+    # If the supabase package is not available for some reason
+    logging.warning("Supabase package not found, using minimal implementation")
+    supabase = MinimalSupabaseClient(SUPABASE_URL, SUPABASE_KEY)
+    logging.info("Using minimal Supabase client implementation due to missing package.")
 
 def clean_nbsp(text):
     return text.replace('\xa0', ' ')
