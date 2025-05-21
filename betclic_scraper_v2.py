@@ -143,6 +143,15 @@ driver = uc.Chrome(options=chrome_options)
 
 def close_popins(driver_instance):
     logging.info("Tentative de fermeture des popins...")
+    # Add a small explicit wait for the primary pop-in selector
+    try:
+        WebDriverWait(driver_instance, 5).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "button#popin_tc_privacy_button_2"))
+        )
+        logging.info("Primary pop-in selector 'button#popin_tc_privacy_button_2' is present.")
+    except TimeoutException:
+        logging.info("Primary pop-in selector 'button#popin_tc_privacy_button_2' NOT found after 5s wait.")
+        
     popin_closed_by_click = False
     # Essayer de cliquer sur les boutons de consentement courants
     known_popin_selectors = [
@@ -207,8 +216,8 @@ def close_popins(driver_instance):
 
 
 driver.get(url)
-logging.info("Page chargée. Attente initiale de 5 secondes...")
-time.sleep(5)
+logging.info("Page chargée. Attente initiale de 10 secondes (augmentée)...")
+time.sleep(10)
 
 close_popins(driver)  # Appeler la fonction de fermeture des popins
 logging.info("Attente de 2 secondes après la gestion des popins...")
@@ -377,9 +386,27 @@ except Exception as e:
     logging.error(f"Erreur lors de l'extraction: {str(e)}", exc_info=True)
 finally:
     # Enregistrement de la page pour le débogage
+    page_source_content = ""
+    if 'driver' in locals() and hasattr(driver, 'page_source'):
+        page_source_content = driver.page_source
+    
     with open("page_debug.html", "w", encoding="utf-8") as f:
-        f.write(driver.page_source if 'driver' in locals() and driver.page_source else "No page source available")
+        f.write(page_source_content if page_source_content else "No page source available")
     logging.info("HTML sauvegardé dans page_debug.html")
+
+    # Log a preview of page_debug.html
+    if page_source_content:
+        logging.info(f"Preview de page_debug.html (premiers 5000 chars):\n{page_source_content[:5000]}")
+    else:
+        logging.info("Aucun contenu de page_source à prévisualiser.")
+
+    # Sauvegarde d'une capture d'écran
+    if 'driver' in locals():
+        try:
+            driver.save_screenshot("render_debug_screenshot.png")
+            logging.info("Capture d'écran sauvegardée dans render_debug_screenshot.png")
+        except Exception as e_screenshot:
+            logging.error(f"Erreur lors de la sauvegarde de la capture d'écran: {e_screenshot}")
 
     # Fermeture du navigateur
     if 'driver' in locals():
