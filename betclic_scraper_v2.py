@@ -19,7 +19,7 @@ import re
 import logging
 import difflib
 
-# Version V2 (mise à jour le 21/05/2025) - adapté à la nouvelle structure du site Betclic
+# Version V2 (mise à jour le 22/05/2025) - revient à l'extraction HTML qui fonctionne
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -125,6 +125,11 @@ supabase = MinimalSupabaseClient(SUPABASE_URL, SUPABASE_KEY)
 
 url = "https://www.betclic.fr/tennis-stennis"
 
+# --- Options pour le scroll ---
+MAX_SCROLL_ATTEMPTS = 10  # Nombre maximum de tentatives de scroll
+SCROLL_PAUSE_TIME = 3  # Temps d'attente en secondes après chaque scroll pour que le contenu charge
+TARGET_MATCH_COUNT = 100  # Optionnel: arrêter si on a trouvé au moins X matchs après scroll
+
 # --- Configurer Chrome ---
 chrome_options = Options()
 chrome_options.add_argument("--disable-gpu")
@@ -139,148 +144,228 @@ chrome_options.add_argument(
 # Initialisation du driver
 driver = uc.Chrome(options=chrome_options)
 
+def close_popins(driver_instance):
+    logging.info("Tentative de fermeture des popins...")
+    popin_closed_by_click = False
+    # Essayer de cliquer sur les boutons de consentement courants
+    known_popin_selectors = [
+        "button#popin_tc_privacy_button_2",  # "Tout Accepter" spécifique Betclic
+        "button[class*='popin_tc_privacy_button'][mode='primary']",  # Boutons primaires dans les popins de privacy
+        "button[aria-label='Continuer sans accepter']",
+        "button[id^='onetrust-accept-btn-handler']",  # Onetrust
+        "button.didomi-components-button.didomi-components-button-primary",  # Didomi
+    ]
+    for selector in known_popin_selectors:
+        try:
+            buttons = driver_instance.find_elements(By.CSS_SELECTOR, selector)
+            for btn in buttons:
+                if btn.is_displayed() and btn.is_enabled():
+                    logging.info(f"Click sur popin via selector: {selector}")
+                    driver_instance.execute_script("arguments[0].click();", btn)  # Clic JS plus robuste
+                    popin_closed_by_click = True
+                    time.sleep(2)  # Attendre que la popin disparaisse
+        except Exception as e:
+            logging.debug(f"Erreur en cliquant sur {selector}: {e}")
+
+    if popin_closed_by_click:
+        logging.info("Popin fermée par clic.")
+    else:
+        logging.info("Aucune popin évidente trouvée pour clic, ou échec du clic.")
+
+    # Forcer la suppression des overlays/popins si toujours présents
+    # Cibler des conteneurs de popins connus
+    js_remove_selectors = [
+        '[class*="popin_tc_privacy"]',  # Betclic privacy
+        '[id^="onetrust-banner"]',  # Onetrust banner
+        '[id="didomi-host"]',  # Didomi host
+        '[class*="overlay"]',  # Classes génériques d'overlay
+        '[role="dialog"]'  # Rôles de dialogue souvent utilisés pour les modales
+    ]
+    removed_count = 0
+    for selector in js_remove_selectors:
+        script = f"""
+            let count = 0;
+            document.querySelectorAll('{selector}').forEach(el => {{
+                el.remove();
+                count++;
+            }});
+            return count;
+        """
+        try:
+            removed = driver_instance.execute_script(script)
+            if removed > 0:
+                logging.info(f"{removed} élément(s) correspondant à '{selector}' supprimé(s) via JS.")
+                removed_count += removed
+        except Exception as e:
+            logging.warning(f"Erreur lors de la suppression JS de '{selector}': {e}")
+
+    if removed_count > 0:
+        logging.info(f"Total de {removed_count} éléments de popin/overlay supprimés via JS.")
+    else:
+        logging.info("Aucun élément de popin/overlay supplémentaire supprimé via JS.")
+    time.sleep(1)
+
 driver.get(url)
 logging.info("Page chargée. Attente initiale de 5 secondes...")
 time.sleep(5)
 
-# --- Extraire les données JSON des matchs ---
-logging.info("Extraction des données JSON des matchs...")
-page_source = driver.page_source
-soup = BeautifulSoup(page_source, "html.parser")
+close_popins(driver)  # Appeler la fonction de fermeture des popins
+logging.info("Attente de 2 secondes après la gestion des popins...")
+time.sleep(2)
 
-# Chercher les données JSON embarquées dans la page
+# --- Logique de scroll ---
+logging.info("Début du scroll pour charger plus de matchs...")
+last_height = driver.execute_script("return document.body.scrollHeight")
+match_elements_count_before_scroll = 0
+
+for i in range(MAX_SCROLL_ATTEMPTS):
+    logging.info(f"Scroll attempt {i + 1}/{MAX_SCROLL_ATTEMPTS}")
+    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    time.sleep(SCROLL_PAUSE_TIME)  # Attendre que la page charge
+
+    new_height = driver.execute_script("return document.body.scrollHeight")
+    current_match_elements = driver.find_elements(By.TAG_NAME, "sports-events-event-card")
+    current_match_elements_count = len(current_match_elements)
+
+    logging.info(
+        f"Hauteur actuelle: {new_height}, Nombre d'éléments 'sports-events-event-card': {current_match_elements_count}")
+
+    if new_height == last_height and current_match_elements_count == match_elements_count_before_scroll:
+        logging.info("Fin du scroll : la hauteur de la page et le nombre de matchs n'ont pas changé.")
+        break
+
+    last_height = new_height
+    match_elements_count_before_scroll = current_match_elements_count
+
+    if TARGET_MATCH_COUNT > 0 and current_match_elements_count >= TARGET_MATCH_COUNT:
+        logging.info(f"Nombre de matchs cible ({TARGET_MATCH_COUNT}) atteint ou dépassé. Arrêt du scroll.")
+        break
+
+    # Petite pause supplémentaire si le contenu semble toujours se charger
+    time.sleep(1)
+else:  # Exécuté si la boucle for se termine sans 'break' (c'est-à-dire, MAX_SCROLL_ATTEMPTS atteint)
+    logging.info(f"Nombre maximum de tentatives de scroll ({MAX_SCROLL_ATTEMPTS}) atteint.")
+
+logging.info("Fin du scroll.")
+# --- Fin de la logique de scroll ---
+
 matches = []
-scraped_dt = datetime.now()
 seen_urls = set()
+scraped_dt = datetime.now()
 
 try:
-    # Trouver tous les matchs de tennis dans le JSON embarqué dans la page
-    # Le format a changé, les matchs sont maintenant stockés dans un objet JSON sur la page
-    json_data = None
-    
-    # Recherche des données JSON dans différents patterns possibles
-    script_patterns = [
-        re.compile(r'({"matches":\[.*?\]})'),
-        re.compile(r'__initial_state__\s*=\s*({.*?});'),
-        re.compile(r'window\.__INITIAL_STATE__\s*=\s*({.*?});')
-    ]
-    
-    for pattern in script_patterns:
-        try:
-            for script in soup.find_all("script"):
-                if script.string:
-                    match = pattern.search(script.string)
-                    if match:
-                        try:
-                            json_text = match.group(1)
-                            potential_data = json.loads(json_text)
-                            if isinstance(potential_data, dict) and ('matches' in potential_data or 'match' in potential_data):
-                                json_data = potential_data
-                                logging.info("Données JSON des matchs trouvées!")
-                                break
-                        except json.JSONDecodeError:
-                            continue
-            if json_data:
-                break
-        except Exception as e:
-            logging.warning(f"Erreur avec pattern {pattern}: {e}")
-    
-    # Si nous n'avons pas pu extraire avec un pattern spécifique, essayons une approche plus générique
-    if not json_data:
-        logging.info("Tentative d'extraction générique des données JSON...")
-        match_regex = re.compile(r'"matchId":"[^"]+","name":"([^"]+)","matchDateUtc":"([^"]+)"')
-        match_data = match_regex.findall(page_source)
-        
-        # Si on trouve des matchs avec cette méthode, créons une structure similaire
-        if match_data:
-            logging.info(f"Extrait {len(match_data)} matchs via regex")
-            
-            for match_name, match_date in match_data:
-                # Extraction des noms des joueurs
-                name_parts = match_name.split(" - ")
-                if len(name_parts) == 2:
-                    player1 = name_parts[0].strip()
-                    player2 = name_parts[1].strip()
-                    
-                    # Création d'une URL fictive basée sur les noms (puisque nous ne pouvons pas extraire les vraies URLs)
-                    player1_slug = re.sub(r'[^a-z0-9]', '-', player1.lower())
-                    player2_slug = re.sub(r'[^a-z0-9]', '-', player2.lower())
-                    match_url = f"https://www.betclic.fr/tennis-stennis/{player1_slug}-vs-{player2_slug}-m{random.randint(10000, 99999)}"
-                    
-                    # Extraire la date et l'heure
-                    try:
-                        match_datetime = datetime.fromisoformat(match_date.replace('Z', '+00:00'))
-                        current_date = match_datetime.strftime("%d/%m")
-                        current_heure = match_datetime.strftime("%H:%M")
-                    except:
-                        current_date = ""
-                        current_heure = ""
-                    
-                    # Chercher le tournoi
-                    tourney_match = re.search(r'"competition":\{"id":"[^"]+","name":"([^"]+)"', page_source)
-                    current_tournoi = tourney_match.group(1) if tourney_match else ""
-                    
-                    matches.append({
-                        "date": current_date,
-                        "heure": current_heure,
-                        "tournoi": current_tournoi,
-                        "tour": "",
-                        "player1": player1,
-                        "player2": player2,
-                        "match_url": match_url,
-                        "scraped_date": scraped_dt.date().isoformat(),
-                        "scraped_time": scraped_dt.time().strftime("%H:%M:%S"),
-                    })
-        else:
-            logging.warning("Aucun match trouvé via regex dans la page.")
-    else:
-        # Traitement des données JSON si elles ont été trouvées
-        if 'matches' in json_data:
-            tennis_matches = json_data.get('matches', [])
-            logging.info(f"Nombre de matchs trouvés dans le JSON: {len(tennis_matches)}")
-            
-            for match in tennis_matches:
-                match_name = match.get('name', '')
-                name_parts = match_name.split(" - ")
-                if len(name_parts) != 2:
-                    continue
-                    
-                player1 = name_parts[0].strip()
-                player2 = name_parts[1].strip()
-                
-                match_date_utc = match.get('matchDateUtc', '')
-                current_date = ""
-                current_heure = ""
-                
-                try:
-                    match_datetime = datetime.fromisoformat(match_date_utc.replace('Z', '+00:00'))
-                    current_date = match_datetime.strftime("%d/%m")
-                    current_heure = match_datetime.strftime("%H:%M")
-                except:
-                    pass
-                
-                # Trouver le tournoi
-                competition = match.get('competition', {})
-                current_tournoi = competition.get('name', '') if competition else ""
-                
-                # Générer l'URL du match
-                match_id = match.get('matchId', '')
-                match_url = f"https://www.betclic.fr/tennis-stennis/match-{match_id}"
-                
-                matches.append({
-                    "date": current_date,
-                    "heure": current_heure,
-                    "tournoi": current_tournoi,
-                    "tour": "",
-                    "player1": player1,
-                    "player2": player2,
-                    "match_url": match_url,
-                    "scraped_date": scraped_dt.date().isoformat(),
-                    "scraped_time": scraped_dt.time().strftime("%H:%M:%S"),
-                })
-    
-    logging.info(f"Nombre total de matchs extraits: {len(matches)}")
-    
+    logging.info("Extraction des informations des matchs après scroll...")
+    # Il est crucial de récupérer le page_source APRÈS tous les scrolls
+    page_source = driver.page_source
+    soup = BeautifulSoup(page_source, "html.parser")
+
+    match_cards = soup.find_all("sports-events-event-card")
+    logging.info(f"Nombre total de cartes de match trouvées après scroll: {len(match_cards)}")
+
+    for card_index, card in enumerate(match_cards):
+        current_date = ""  # Réinitialiser pour chaque carte
+        current_heure = ""  # Réinitialiser pour chaque carte
+        current_tournoi = ""  # Réinitialiser pour chaque carte
+        current_tour = ""  # Réinitialiser pour chaque carte (toujours vide pour Betclic apparemment)
+
+        # Noms des joueurs
+        players = card.find_all("div", class_="scoreboard_contestantLabel")
+        player1 = players[0].text.strip() if len(players) > 0 else ""
+        player2 = players[1].text.strip() if len(players) > 1 else ""
+
+        # URL de la rencontre
+        a_tag = card.find("a", class_="cardEvent")
+        match_url = ""
+        if a_tag and "href" in a_tag.attrs:
+            match_url = "https://www.betclic.fr" + a_tag["href"]
+
+        if not match_url or match_url in seen_urls:
+            logging.debug(f"Match {player1} vs {player2} ignoré (URL vide ou déjà vue: {match_url})")
+            continue
+        seen_urls.add(match_url)
+
+        player1_full, player2_full = player1, player2
+        if a_tag and "href" in a_tag.attrs:
+            match_obj = re.search(r'/([a-z0-9\-]+)-m\d+$', a_tag["href"])
+            if match_obj:
+                full_slug = match_obj.group(1)
+                parts = full_slug.split('-')
+                # Logique améliorée pour diviser les noms, gère les noms composés
+                # Exemple: 'alex-de-minaur-vs-jan-lennard-struff'
+                # On cherche le 'vs' implicite. Le slug est 'joueur1-joueur2'
+                # On ne peut pas juste diviser par 2 si un joueur a un nom composé.
+                # Cependant, Betclic semble utiliser le même nombre de tirets pour chaque joueur
+                # Ex: 'alex-de-minaur' (2 tirets) et 'jan-lennard-struff' (2 tirets)
+                # Si les noms sont p.ex. 'taylor-fritz' et 'sebastian-baez', on divise par 2.
+                # Pour l'instant, on garde la division par 2, mais il faut être conscient de sa fragilité.
+                # Une meilleure approche serait d'avoir une liste de noms connus ou une heuristique plus fine.
+                n_parts = len(parts)
+                # Si le nombre de parties est impair, c'est difficile, on fait une approximation
+                # ex: novak-djokovic-carlos-alcaraz -> djokovic est partagé.
+                # Le slug betclic est souvent 'nom1part1-nom1part2-nom2part1-nom2part2'
+                # Donc diviser au milieu est généralement correct.
+                split_point = n_parts // 2
+                slug1 = '-'.join(parts[:split_point])
+                slug2 = '-'.join(parts[split_point:])
+
+                def slug_to_name(slug):
+                    return ' '.join([x.capitalize() for x in slug.replace('-', ' ').split()])
+
+                player1_full = slug_to_name(slug1)
+                player2_full = slug_to_name(slug2)
+            else:  # Fallback si le regex ne match pas, mais qu'on a les noms courts
+                player1_full = player1
+                player2_full = player2
+        else:  # Fallback si pas de a_tag
+            player1_full = player1
+            player2_full = player2
+
+        # Date et heure
+        event_info_time = card.find("div", class_="event_infoTime")
+        if event_info_time and event_info_time.text.strip():
+            date_heure_text = event_info_time.text.strip()
+            # Gérer "Auj.", "Dem." et les dates complètes
+            if "Auj." in date_heure_text or "Dem." in date_heure_text:  # ex: "Auj. 14:00" ou "Dem. Jeu. 23:00"
+                parts = date_heure_text.split()
+                if len(parts) >= 2:
+                    current_date = parts[0]  # Peut être "Auj." ou "Dem."
+                    current_heure = parts[-1]  # L'heure est toujours la dernière partie
+            else:  # ex: "Jeu. 01/01 15:00"
+                parts = date_heure_text.split()
+                if len(parts) == 3:  # "Jeu. 01/01 15:00"
+                    current_date = f"{parts[0]} {parts[1]}"  # "Jeu. 01/01"
+                    current_heure = parts[2]  # "15:00"
+                elif len(parts) == 2:  # Cas "01/01 15:00" (moins probable sans jour)
+                    current_date = parts[0]
+                    current_heure = parts[1]
+
+        # Extraction du nom du tournoi depuis l'URL (généralement plus fiable)
+        if a_tag and "href" in a_tag.attrs:
+            url_parts = a_tag["href"].split("/")
+            if len(url_parts) > 2:  # e.g., /fr/tennis/atp-rome-c33/...
+                tournoi_slug_full = url_parts[2]  # "atp-rome-c33" ou "roland-garros- 프랑스 오픈-c123"
+                # Prendre tout avant le premier "-c" suivi de chiffres
+                tournoi_match = re.match(r"^(.*?)(-c\d+)?$", tournoi_slug_full)
+                if tournoi_match:
+                    tournoi_slug = tournoi_match.group(1)
+                    current_tournoi = tournoi_slug.replace('-', ' ').title()
+                else:  # Fallback si le regex ne match pas
+                    current_tournoi = tournoi_slug_full.replace('-', ' ').title()
+
+        logging.info(
+            f"Match {card_index + 1}/{len(match_cards)}: {player1_full} vs {player2_full} | Date: {current_date}, Heure: {current_heure} | Tournoi: {current_tournoi} | URL: {match_url}")
+
+        matches.append({
+            "date": current_date,
+            "heure": current_heure,
+            "tournoi": current_tournoi,
+            "tour": current_tour,  # Reste vide car non trouvé sur la page Betclic
+            "player1": player1_full,
+            "player2": player2_full,
+            "match_url": match_url,
+            "scraped_date": scraped_dt.date().isoformat(),
+            "scraped_time": scraped_dt.time().strftime("%H:%M:%S"),
+        })
 except Exception as e:
     logging.error(f"Erreur lors de l'extraction: {str(e)}", exc_info=True)
 finally:
@@ -291,6 +376,8 @@ finally:
 
     # Fermeture du navigateur
     driver.quit()
+
+logging.info(f"Nombre total de matchs extraits: {len(matches)}")
 
 # Création du DataFrame
 df = pd.DataFrame(matches)
@@ -421,6 +508,6 @@ if not df.empty:
 
     logging.info(f"Processus terminé. {len(df_for_upload)} matchs potentiellement traités pour insertion.")
 else:
-    logging.warning("Aucun match trouvé après extraction, la base de données n'est pas modifiée.")
+    logging.warning("Aucun match trouvé après scroll, la base de données n'est pas modifiée.")
 
 logging.info("Script terminé.") 
