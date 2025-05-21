@@ -12,13 +12,15 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 import os
-from supabase import create_client, Client
+# from supabase import create_client, Client # Commented out original client
 from dotenv import load_dotenv
 from datetime import datetime
 import random
 import re
 import logging
 import difflib
+import httpx  # Added for MinimalSupabaseClient
+from typing import List, Dict, Any  # Added for MinimalSupabaseClient
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,7 +28,96 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# --- Definition of MinimalSupabaseClient ---
+class MinimalSupabaseClient:
+    def __init__(self, supabase_url: str, supabase_key: str):
+        self.supabase_url = supabase_url.rstrip('/')
+        self.supabase_key = supabase_key
+        self.base_headers = {
+            "apikey": self.supabase_key,
+            "Authorization": f"Bearer {self.supabase_key}",
+            "Content-Type": "application/json",
+        }
+        self.client = httpx.Client(headers=self.base_headers, timeout=30.0)
+        self.current_table = None
+
+    def table(self, table_name: str):
+        self.current_table = table_name
+        return self
+
+    def select(self, columns: str = "*", params: dict = None):
+        if not self.current_table:
+            logging.error("Table not set for select operation.")
+            return {"data": [], "error": "Table not set", "count": None}
+        
+        url = f"{self.supabase_url}/rest/v1/{self.current_table}?select={columns}"
+        
+        try:
+            response = self.client.get(url, params=params if params else {})
+            response.raise_for_status()
+            count = None
+            content_range = response.headers.get("content-range")
+            if content_range and "/" in content_range:
+                count_str = content_range.split("/")[-1]
+                if count_str != "*":
+                    count = int(count_str)
+            return {"data": response.json(), "error": None, "count": count}
+        except httpx.HTTPStatusError as e:
+            logging.error(f"HTTP error during select on {self.current_table}: {e.response.text if e.response else str(e)}")
+            return {"data": [], "error": str(e), "count": None}
+        except Exception as e:
+            logging.error(f"Generic error during select on {self.current_table}: {e}")
+            return {"data": [], "error": str(e), "count": None}
+
+    def insert(self, data: list, upsert: bool = False):
+        if not self.current_table:
+            logging.error("Table not set for insert operation.")
+            return {"data": [], "error": "Table not set"}
+
+        url = f"{self.supabase_url}/rest/v1/{self.current_table}"
+        
+        custom_headers = self.base_headers.copy()
+        custom_headers["Prefer"] = "return=representation"
+        if upsert:
+            custom_headers["Prefer"] += ",resolution=merge-duplicates"
+            logging.info(f"Performing upsert on {self.current_table} with Prefer: {custom_headers['Prefer']}")
+
+
+        try:
+            response = self.client.post(url, json=data, headers=custom_headers)
+            response.raise_for_status()
+            return {"data": response.json(), "error": None}
+        except httpx.HTTPStatusError as e:
+            logging.error(f"HTTP error during insert on {self.current_table}: {e.response.text if e.response else str(e)}")
+            return {"data": [], "error": str(e)}
+        except Exception as e:
+            logging.error(f"Generic error during insert on {self.current_table}: {e}")
+            return {"data": [], "error": str(e)}
+
+    def delete_rows(self, params: dict = None):
+        if not self.current_table:
+            logging.error("Table not set for delete operation.")
+            return {"data": [], "error": "Table not set"}
+
+        url = f"{self.supabase_url}/rest/v1/{self.current_table}"
+        
+        custom_headers = self.base_headers.copy()
+        custom_headers["Prefer"] = "return=representation"
+
+        try:
+            response = self.client.delete(url, params=params if params else {}, headers=custom_headers)
+            response.raise_for_status()
+            return {"data": response.json() if response.status_code != 204 else [], "error": None}
+        except httpx.HTTPStatusError as e:
+            logging.error(f"HTTP error during delete on {self.current_table}: {e.response.text if e.response else str(e)}")
+            return {"data": [], "error": str(e)}
+        except Exception as e:
+            logging.error(f"Generic error during delete on {self.current_table}: {e}")
+            return {"data": [], "error": str(e)}
+
+# supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) # Old client
+supabase = MinimalSupabaseClient(supabase_url=SUPABASE_URL, supabase_key=SUPABASE_KEY) # New client
 
 url = "https://www.betclic.fr/tennis-stennis"
 
@@ -304,12 +395,12 @@ if not df.empty:
     # Récupérer les joueurs ratings depuis Supabase
     logging.info("Récupération des données Elo depuis Supabase...")
     try:
-        elo_response = supabase.table("atp_elo_ratings").select("*").execute()
-        if elo_response.data:
-            elo_players = elo_response.data
+        elo_response = supabase.table("atp_elo_ratings").select("*") # Removed .execute()
+        if elo_response["error"] is None and elo_response["data"]:
+            elo_players = elo_response["data"]
             elo_df = pd.DataFrame(elo_players)
         else:
-            logging.warning("Aucune donnée Elo reçue de Supabase. La table 'atp_elo_ratings' est peut-être vide.")
+            logging.warning(f"Aucune donnée Elo reçue de Supabase ou erreur. Erreur: {elo_response['error']}. La table 'atp_elo_ratings' est peut-être vide.")
             elo_df = pd.DataFrame(columns=['player'])  # DataFrame vide avec la colonne attendue
     except Exception as e:
         logging.error(f"Erreur lors de la récupération des données Elo: {e}")
@@ -400,10 +491,12 @@ if not df.empty:
     # Supprime tous les anciens matchs à venir
     logging.info("Suppression des anciens matchs de la table 'upcoming_matches'...")
     try:
-        delete_response = supabase.table("upcoming_matches").delete().neq('id',
-                                                                          -1).execute()  # neq est un placeholder pour "delete all"
+        # Original: delete_response = supabase.table("upcoming_matches").delete().neq('id', -1).execute()
+        delete_response = supabase.table("upcoming_matches").delete_rows(params={"id": "neq.-1"})
         logging.info(
-            f"Réponse de la suppression: {delete_response.data if hasattr(delete_response, 'data') else 'Pas de données de réponse'}")
+            f"Réponse de la suppression: {delete_response['data'] if delete_response['error'] is None else delete_response['error']}")
+        if delete_response["error"]:
+             logging.error(f"Erreur lors de la suppression des anciens matchs: {delete_response['error']}")
     except Exception as e:
         logging.error(f"Erreur lors de la suppression des anciens matchs: {e}")
 
@@ -415,11 +508,11 @@ if not df.empty:
     for i in range(0, len(data_to_insert), chunk_size):
         chunk = data_to_insert[i:i + chunk_size]
         try:
-            insert_response = supabase.table("upcoming_matches").insert(chunk).execute()
+            insert_response = supabase.table("upcoming_matches").insert(chunk) # Removed .execute()
             logging.info(
-                f"Chunk {i // chunk_size + 1} inséré. Réponse: {insert_response.data if hasattr(insert_response, 'data') else 'Pas de données de réponse'}")
-            if hasattr(insert_response, 'error') and insert_response.error:
-                logging.error(f"Erreur Supabase lors de l'insertion du chunk: {insert_response.error}")
+                f"Chunk {i // chunk_size + 1} inséré. Réponse: {insert_response['data'] if insert_response['error'] is None else insert_response['error']}")
+            if insert_response["error"] is not None:
+                logging.error(f"Erreur Supabase lors de l'insertion du chunk: {insert_response['error']}")
         except Exception as e:
             logging.error(f"Erreur lors de l'insertion du chunk {i // chunk_size + 1}: {e}")
 
