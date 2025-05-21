@@ -10,7 +10,9 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 import os
-from supabase import create_client, Client
+from supabase import create_client, Client, __version__ as supabase_py_version
+from supabase.lib.client_options import ClientOptions, AuthClientOptions
+import httpx
 from dotenv import load_dotenv
 from datetime import datetime
 import random
@@ -25,20 +27,38 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Création du client Supabase avec gestion d'erreur pour le paramètre proxy
+if not SUPABASE_URL or not SUPABASE_KEY:
+    logging.critical("SUPABASE_URL and SUPABASE_KEY environment variables are not set or empty.")
+    raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set for the script to run.")
+
+# Prepare headers for the custom httpx client
+headers = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "X-Client-Info": f"supabase-py/{supabase_py_version}",
+}
+
+# Use the same default timeout as gotrue-py (dependency of supabase-py)
+default_gotrue_timeout = httpx.Timeout(10.0, connect=5.0)
+
+# Create a custom httpx client instance
+custom_httpx_client = httpx.Client(
+    headers=headers,
+    trust_env=False,  # Explicitly disable proxy environment variables
+    timeout=default_gotrue_timeout
+)
+
+# Configure Supabase client options to use our custom httpx client for auth
+auth_options = AuthClientOptions(http_client=custom_httpx_client)
+client_options = ClientOptions(auth=auth_options)
+
 try:
-    # Essayons d'abord sans options spéciales
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-except TypeError as e:
-    if "proxy" in str(e):
-        logging.warning("Erreur avec le paramètre proxy, tentative alternative...")
-        # La version actuelle de supabase-py a un problème avec le paramètre proxy
-        # Importons directement la classe qu'on utilisera avec des paramètres simplifiés
-        from supabase._sync.client import SyncClient
-        supabase = SyncClient(SUPABASE_URL, SUPABASE_KEY, {})
-    else:
-        # Si c'est une autre erreur, la remonter
-        raise
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY, client_options)
+    logging.info("Supabase client created successfully with custom httpx client (trust_env=False).")
+except Exception as e:
+    # Log the detailed error and re-raise to ensure visibility if creation still fails
+    logging.error(f"Failed to create Supabase client even with custom httpx client: {e}", exc_info=True)
+    raise
 
 url = "https://www.betclic.fr/tennis-stennis"
 
