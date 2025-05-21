@@ -124,54 +124,9 @@ class SupabaseResponse:
     def __init__(self, data):
         self.data = data
 
-# Try to use official Supabase client, but fall back to minimal implementation if it fails
-try:
-    # Try importing from supabase
-    from supabase import create_client, Client
-    
-    try:
-        # First attempt with standard client
-        logging.info("Attempting to create standard Supabase client...")
-        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        logging.info("Successfully created standard Supabase client.")
-    except Exception as e1:
-        logging.warning(f"Failed to create standard Supabase client: {str(e1)}")
-        
-        try:
-            # Second attempt with custom options
-            logging.info("Attempting with custom client options...")
-            from supabase.lib.client_options import ClientOptions, AuthClientOptions
-            import httpx
-            
-            # Create client options with no proxy
-            custom_httpx_client = httpx.Client(
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}"
-                },
-                trust_env=False,
-                timeout=10.0
-            )
-            
-            # Configure options
-            auth_options = AuthClientOptions(http_client=custom_httpx_client)
-            client_options = ClientOptions(auth=auth_options)
-            
-            # Try creating client with options
-            supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY, client_options)
-            logging.info("Successfully created Supabase client with custom options.")
-        except Exception as e2:
-            logging.warning(f"Failed to create Supabase client with custom options: {str(e2)}")
-            
-            # Final fallback
-            logging.info("Falling back to minimal Supabase client implementation...")
-            supabase = MinimalSupabaseClient(SUPABASE_URL, SUPABASE_KEY)
-            logging.info("Using minimal Supabase client implementation.")
-except ImportError:
-    # If the supabase package is not available for some reason
-    logging.warning("Supabase package not found, using minimal implementation")
-    supabase = MinimalSupabaseClient(SUPABASE_URL, SUPABASE_KEY)
-    logging.info("Using minimal Supabase client implementation due to missing package.")
+# Use our minimal implementation directly
+logging.info("Using minimal Supabase client implementation...")
+supabase = MinimalSupabaseClient(SUPABASE_URL, SUPABASE_KEY)
 
 def clean_nbsp(text):
     return text.replace('\xa0', ' ')
