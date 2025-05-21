@@ -19,10 +19,10 @@ import re
 import logging
 import difflib
 
-# Version V2 (mise à jour le 22/05/2025) - HTML SCRAPING VERSION
-logging.info("=== RUNNING HTML SCRAPING VERSION (22/05/2025) ===")
+# Version V2 (mise à jour le 22/05/2025) - VERSION FINALE AVEC HTML SCRAPING
+logging.info("=== RUNNING FINAL HTML SCRAPING VERSION WITH MINIMAL SUPABASE CLIENT (22/05/2025) ===")
 
-# Configuration du logging
+# Configuration du logging - AVANT tout pour voir tous les logs
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 load_dotenv()
@@ -131,7 +131,6 @@ MAX_SCROLL_ATTEMPTS = 10  # Nombre maximum de tentatives de scroll
 SCROLL_PAUSE_TIME = 3  # Temps d'attente en secondes après chaque scroll pour que le contenu charge
 TARGET_MATCH_COUNT = 100  # Optionnel: arrêter si on a trouvé au moins X matchs après scroll
 
-# --- Configurer Chrome ---
 chrome_options = Options()
 chrome_options.add_argument("--disable-gpu")
 chrome_options.add_argument("--headless")
@@ -206,55 +205,56 @@ def close_popins(driver_instance):
         logging.info("Aucun élément de popin/overlay supplémentaire supprimé via JS.")
     time.sleep(1)
 
-driver.get(url)
-logging.info("Page chargée. Attente initiale de 5 secondes...")
-time.sleep(5)
-
-close_popins(driver)  # Appeler la fonction de fermeture des popins
-logging.info("Attente de 2 secondes après la gestion des popins...")
-time.sleep(2)
-
-# --- Logique de scroll ---
-logging.info("Début du scroll pour charger plus de matchs...")
-last_height = driver.execute_script("return document.body.scrollHeight")
-match_elements_count_before_scroll = 0
-
-for i in range(MAX_SCROLL_ATTEMPTS):
-    logging.info(f"Scroll attempt {i + 1}/{MAX_SCROLL_ATTEMPTS}")
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-    time.sleep(SCROLL_PAUSE_TIME)  # Attendre que la page charge
-
-    new_height = driver.execute_script("return document.body.scrollHeight")
-    current_match_elements = driver.find_elements(By.TAG_NAME, "sports-events-event-card")
-    current_match_elements_count = len(current_match_elements)
-
-    logging.info(
-        f"Hauteur actuelle: {new_height}, Nombre d'éléments 'sports-events-event-card': {current_match_elements_count}")
-
-    if new_height == last_height and current_match_elements_count == match_elements_count_before_scroll:
-        logging.info("Fin du scroll : la hauteur de la page et le nombre de matchs n'ont pas changé.")
-        break
-
-    last_height = new_height
-    match_elements_count_before_scroll = current_match_elements_count
-
-    if TARGET_MATCH_COUNT > 0 and current_match_elements_count >= TARGET_MATCH_COUNT:
-        logging.info(f"Nombre de matchs cible ({TARGET_MATCH_COUNT}) atteint ou dépassé. Arrêt du scroll.")
-        break
-
-    # Petite pause supplémentaire si le contenu semble toujours se charger
-    time.sleep(1)
-else:  # Exécuté si la boucle for se termine sans 'break' (c'est-à-dire, MAX_SCROLL_ATTEMPTS atteint)
-    logging.info(f"Nombre maximum de tentatives de scroll ({MAX_SCROLL_ATTEMPTS}) atteint.")
-
-logging.info("Fin du scroll.")
-# --- Fin de la logique de scroll ---
-
-matches = []
-seen_urls = set()
-scraped_dt = datetime.now()
-
+# DÉMARRAGE DU SCRIPT PRINCIPAL
 try:
+    driver.get(url)
+    logging.info("Page chargée. Attente initiale de 5 secondes...")
+    time.sleep(5)
+
+    close_popins(driver)  # Appeler la fonction de fermeture des popins
+    logging.info("Attente de 2 secondes après la gestion des popins...")
+    time.sleep(2)
+
+    # --- Logique de scroll ---
+    logging.info("Début du scroll pour charger plus de matchs...")
+    last_height = driver.execute_script("return document.body.scrollHeight")
+    match_elements_count_before_scroll = 0
+
+    for i in range(MAX_SCROLL_ATTEMPTS):
+        logging.info(f"Scroll attempt {i + 1}/{MAX_SCROLL_ATTEMPTS}")
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(SCROLL_PAUSE_TIME)  # Attendre que la page charge
+
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        current_match_elements = driver.find_elements(By.TAG_NAME, "sports-events-event-card")
+        current_match_elements_count = len(current_match_elements)
+
+        logging.info(
+            f"Hauteur actuelle: {new_height}, Nombre d'éléments 'sports-events-event-card': {current_match_elements_count}")
+
+        if new_height == last_height and current_match_elements_count == match_elements_count_before_scroll:
+            logging.info("Fin du scroll : la hauteur de la page et le nombre de matchs n'ont pas changé.")
+            break
+
+        last_height = new_height
+        match_elements_count_before_scroll = current_match_elements_count
+
+        if TARGET_MATCH_COUNT > 0 and current_match_elements_count >= TARGET_MATCH_COUNT:
+            logging.info(f"Nombre de matchs cible ({TARGET_MATCH_COUNT}) atteint ou dépassé. Arrêt du scroll.")
+            break
+
+        # Petite pause supplémentaire si le contenu semble toujours se charger
+        time.sleep(1)
+    else:  # Exécuté si la boucle for se termine sans 'break' (c'est-à-dire, MAX_SCROLL_ATTEMPTS atteint)
+        logging.info(f"Nombre maximum de tentatives de scroll ({MAX_SCROLL_ATTEMPTS}) atteint.")
+
+    logging.info("Fin du scroll.")
+    # --- Fin de la logique de scroll ---
+
+    matches = []
+    seen_urls = set()
+    scraped_dt = datetime.now()
+
     logging.info("Extraction des informations des matchs après scroll...")
     # Il est crucial de récupérer le page_source APRÈS tous les scrolls
     page_source = driver.page_source
@@ -367,8 +367,9 @@ try:
             "scraped_date": scraped_dt.date().isoformat(),
             "scraped_time": scraped_dt.time().strftime("%H:%M:%S"),
         })
+        
 except Exception as e:
-    logging.error(f"Erreur lors de l'extraction: {str(e)}", exc_info=True)
+    logging.error(f"Erreur globale lors de l'extraction: {str(e)}", exc_info=True)
 finally:
     # Enregistrement de la page pour le débogage
     with open("page_debug.html", "w", encoding="utf-8") as f:
@@ -376,7 +377,8 @@ finally:
     logging.info("HTML sauvegardé dans page_debug.html")
 
     # Fermeture du navigateur
-    driver.quit()
+    if 'driver' in locals():
+        driver.quit()
 
 logging.info(f"Nombre total de matchs extraits: {len(matches)}")
 
