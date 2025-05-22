@@ -112,7 +112,7 @@ supabase = MinimalSupabaseClient(supabase_url=SUPABASE_URL, supabase_key=SUPABAS
 # ScraperAPI configuration
 SCRAPERAPI_ENDPOINT = "http://api.scraperapi.com"
 
-def get_scraperapi_response(url, retries=3):
+def get_scraperapi_response(url, retries=5):
     """
     Fetch a URL using ScraperAPI with retry logic
     """
@@ -123,28 +123,95 @@ def get_scraperapi_response(url, retries=3):
         'country_code': 'fr',  # Use French proxy
         'device_type': 'desktop',
         'premium': 'true',  # Use premium proxies for better success rate
-        'session_number': random.randint(1, 100)  # Random session for variety
+        'session_number': random.randint(1, 1000),  # Random session for variety
+        'keep_headers': 'true',  # Keep original headers
+        'autoparse': 'false',  # Disable autoparse for better control
+        'format': 'html',  # Ensure HTML format
+        'wait': '5000',  # Wait 5 seconds for page to load
+        'scroll': 'true',  # Enable scrolling to load dynamic content
+        'screenshot': 'false'  # Disable screenshot to save bandwidth
+    }
+    
+    # Add custom headers to make request look more legitimate
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
     }
     
     for attempt in range(retries):
         try:
             logging.info(f"Fetching {url} via ScraperAPI (attempt {attempt + 1}/{retries})")
-            response = requests.get(SCRAPERAPI_ENDPOINT, params=params, timeout=70)
+            
+            # Randomize session number for each attempt
+            params['session_number'] = random.randint(1, 1000)
+            
+            response = requests.get(SCRAPERAPI_ENDPOINT, params=params, headers=headers, timeout=90)
             
             if response.status_code == 200:
-                logging.info(f"Successfully fetched {url}")
-                return response.text
+                content = response.text
+                # Check if we got a 403 error page
+                if "Error 403" in content or "Forbidden" in content:
+                    logging.warning(f"Received 403 Forbidden page from Betclic (attempt {attempt + 1})")
+                    if attempt < retries - 1:
+                        # Try with different country codes
+                        if attempt == 1:
+                            params['country_code'] = 'be'  # Try Belgium
+                            logging.info("Switching to Belgium proxy")
+                        elif attempt == 2:
+                            params['country_code'] = 'ch'  # Try Switzerland
+                            logging.info("Switching to Switzerland proxy")
+                        time.sleep(10)  # Wait longer before retry
+                        continue
+                else:
+                    logging.info(f"Successfully fetched {url}")
+                    return content
             else:
                 logging.warning(f"ScraperAPI returned status code {response.status_code} for {url}")
                 if attempt < retries - 1:
-                    time.sleep(5)  # Wait before retry
+                    time.sleep(10)  # Wait longer before retry
                     
         except requests.exceptions.RequestException as e:
             logging.error(f"Request failed for {url}: {e}")
             if attempt < retries - 1:
-                time.sleep(5)  # Wait before retry
+                time.sleep(10)  # Wait longer before retry
     
-    logging.error(f"Failed to fetch {url} after {retries} attempts")
+    # If all attempts failed, try one last time with ultra-premium settings
+    logging.info("Trying final attempt with ultra-premium ScraperAPI settings...")
+    try:
+        ultra_params = {
+            'api_key': SCRAPERAPI_KEY,
+            'url': url,
+            'render': 'true',
+            'country_code': 'fr',
+            'device_type': 'desktop',
+            'premium': 'true',
+            'ultra_premium': 'true',  # Use ultra premium if available
+            'session_number': random.randint(1, 10000),
+            'keep_headers': 'true',
+            'wait': '10000',  # Wait 10 seconds
+            'scroll': 'true',
+            'residential': 'true'  # Use residential proxies if available
+        }
+        
+        response = requests.get(SCRAPERAPI_ENDPOINT, params=ultra_params, headers=headers, timeout=120)
+        
+        if response.status_code == 200:
+            content = response.text
+            if "Error 403" not in content and "Forbidden" not in content:
+                logging.info("Ultra-premium attempt successful!")
+                return content
+            else:
+                logging.warning("Ultra-premium attempt also received 403")
+        
+    except Exception as e:
+        logging.error(f"Ultra-premium attempt failed: {e}")
+    
+    logging.error(f"Failed to fetch {url} after {retries + 1} attempts (including ultra-premium)")
     return None
 
 def scrape_betclic_matches():
