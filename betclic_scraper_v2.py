@@ -112,25 +112,116 @@ supabase = MinimalSupabaseClient(supabase_url=SUPABASE_URL, supabase_key=SUPABAS
 # ScraperAPI configuration
 SCRAPERAPI_ENDPOINT = "http://api.scraperapi.com"
 
-def get_scraperapi_response(url, retries=5):
+def get_scraperapi_response(url, retries=5, enhanced_scroll=False):
     """
-    Fetch a URL using ScraperAPI with retry logic
+    Fetch a URL using ScraperAPI with retry logic and custom JavaScript for scrolling
     """
-    params = {
-        'api_key': SCRAPERAPI_KEY,
-        'url': url,
-        'render': 'true',  # Enable JavaScript rendering
-        'country_code': 'fr',  # Use French proxy
-        'device_type': 'desktop',
-        'premium': 'true',  # Use premium proxies for better success rate
-        'session_number': random.randint(1, 1000),  # Random session for variety
-        'keep_headers': 'true',  # Keep original headers
-        'autoparse': 'false',  # Disable autoparse for better control
-        'format': 'html',  # Ensure HTML format
-        'wait': '5000',  # Wait 5 seconds for page to load
-        'scroll': 'true',  # Enable scrolling to load dynamic content
-        'screenshot': 'false'  # Disable screenshot to save bandwidth
-    }
+    if enhanced_scroll:
+        # Enhanced parameters with custom JavaScript for aggressive scrolling
+        custom_js = """
+        // Enhanced JavaScript that closely mimics the working Selenium script
+        console.log('Starting enhanced scroll simulation...');
+        
+        const MAX_SCROLL_ATTEMPTS = 10;
+        const SCROLL_PAUSE_TIME = 3000;
+        const TARGET_MATCH_COUNT = 100;
+        
+        let scrollAttempts = 0;
+        let lastHeight = document.body.scrollHeight;
+        let lastMatchCount = document.querySelectorAll('sports-events-event-card').length;
+        
+        console.log(`Initial state - Height: ${lastHeight}, Matches: ${lastMatchCount}`);
+        
+        function performScroll() {
+            return new Promise((resolve) => {
+                if (scrollAttempts >= MAX_SCROLL_ATTEMPTS) {
+                    console.log(`Max scroll attempts (${MAX_SCROLL_ATTEMPTS}) reached`);
+                    resolve();
+                    return;
+                }
+                
+                scrollAttempts++;
+                console.log(`Scroll attempt ${scrollAttempts}/${MAX_SCROLL_ATTEMPTS}`);
+                
+                // Scroll to bottom exactly like Selenium
+                window.scrollTo(0, document.body.scrollHeight);
+                
+                setTimeout(() => {
+                    const newHeight = document.body.scrollHeight;
+                    const currentMatchCount = document.querySelectorAll('sports-events-event-card').length;
+                    
+                    console.log(`After scroll ${scrollAttempts} - Height: ${newHeight}, Matches: ${currentMatchCount}`);
+                    
+                    // Check if we've reached target match count
+                    if (TARGET_MATCH_COUNT > 0 && currentMatchCount >= TARGET_MATCH_COUNT) {
+                        console.log(`Target match count (${TARGET_MATCH_COUNT}) reached. Stopping scroll.`);
+                        resolve();
+                        return;
+                    }
+                    
+                    // Check if no new content loaded (both height and match count unchanged)
+                    if (newHeight === lastHeight && currentMatchCount === lastMatchCount) {
+                        console.log('No new content loaded - height and match count unchanged. Stopping scroll.');
+                        resolve();
+                        return;
+                    }
+                    
+                    // Update tracking variables
+                    lastHeight = newHeight;
+                    lastMatchCount = currentMatchCount;
+                    
+                    // Continue scrolling
+                    setTimeout(() => {
+                        performScroll().then(resolve);
+                    }, 1000); // Additional pause like in Selenium script
+                    
+                }, SCROLL_PAUSE_TIME);
+            });
+        }
+        
+        // Wait for initial page load, then start scrolling
+        setTimeout(() => {
+            console.log('Starting scroll sequence...');
+            performScroll().then(() => {
+                console.log('Scroll sequence completed');
+                const finalMatchCount = document.querySelectorAll('sports-events-event-card').length;
+                console.log(`Final match count: ${finalMatchCount}`);
+            });
+        }, 5000);
+        """
+        
+        params = {
+            'api_key': SCRAPERAPI_KEY,
+            'url': url,
+            'render': 'true',  # Enable JavaScript rendering
+            'country_code': 'fr',  # Use French proxy
+            'device_type': 'desktop',
+            'premium': 'true',  # Use premium proxies for better success rate
+            'session_number': random.randint(1, 1000),  # Random session for variety
+            'keep_headers': 'true',  # Keep original headers
+            'autoparse': 'false',  # Disable autoparse for better control
+            'format': 'html',  # Ensure HTML format
+            'wait': '45000',  # Wait 45 seconds for page to load and scroll
+            'js': custom_js,  # Custom JavaScript for scrolling
+            'screenshot': 'false'  # Disable screenshot to save bandwidth
+        }
+    else:
+        # Standard parameters
+        params = {
+            'api_key': SCRAPERAPI_KEY,
+            'url': url,
+            'render': 'true',  # Enable JavaScript rendering
+            'country_code': 'fr',  # Use French proxy
+            'device_type': 'desktop',
+            'premium': 'true',  # Use premium proxies for better success rate
+            'session_number': random.randint(1, 1000),  # Random session for variety
+            'keep_headers': 'true',  # Keep original headers
+            'autoparse': 'false',  # Disable autoparse for better control
+            'format': 'html',  # Ensure HTML format
+            'wait': '5000',  # Wait 5 seconds for page to load
+            'scroll': 'true',  # Enable scrolling to load dynamic content
+            'screenshot': 'false'  # Disable screenshot to save bandwidth
+        }
     
     # Add custom headers to make request look more legitimate
     headers = {
@@ -216,124 +307,431 @@ def get_scraperapi_response(url, retries=5):
 
 def scrape_betclic_matches():
     """
-    Scrape Betclic tennis matches using ScraperAPI
+    Scrape Betclic tennis matches using ScraperAPI with scrolling simulation
     """
     url = "https://www.betclic.fr/tennis-stennis"
     
-    # Get the page content via ScraperAPI
-    page_content = get_scraperapi_response(url)
+    # First, get the initial page content
+    logging.info("Loading initial page content...")
+    initial_content = get_scraperapi_response(url)
     
-    if not page_content:
-        logging.error("Failed to get page content from ScraperAPI")
+    if not initial_content:
+        logging.error("Failed to get initial page content from ScraperAPI")
         return []
     
-    # Save page content for debugging
-    with open("page_debug.html", "w", encoding="utf-8") as f:
-        f.write(page_content)
-    logging.info("HTML saved to page_debug.html")
+    # Save initial content for debugging
+    with open("page_debug_initial.html", "w", encoding="utf-8") as f:
+        f.write(initial_content)
+    logging.info("Initial HTML saved to page_debug_initial.html")
     
-    soup = BeautifulSoup(page_content, "html.parser")
+    # Parse initial content to see how many matches we have
+    soup = BeautifulSoup(initial_content, "html.parser")
+    initial_match_cards = soup.find_all("sports-events-event-card")
+    logging.info(f"Found {len(initial_match_cards)} match cards in initial load")
+    
+    # Try multiple scroll strategies to get more content
+    logging.info("Attempting to load more content with enhanced scroll simulation...")
+    enhanced_content = get_scraperapi_response(url, enhanced_scroll=True)
+    
+    # Compare content and match counts
+    best_content = initial_content
+    best_match_count = len(initial_match_cards)
+    content_source = "initial"
+    
+    if enhanced_content:
+        enhanced_soup = BeautifulSoup(enhanced_content, "html.parser")
+        enhanced_match_cards = enhanced_soup.find_all("sports-events-event-card")
+        enhanced_match_count = len(enhanced_match_cards)
+        
+        logging.info(f"Enhanced loading found {enhanced_match_count} match cards")
+        
+        # Save enhanced content for debugging
+        with open("page_debug_enhanced.html", "w", encoding="utf-8") as f:
+            f.write(enhanced_content)
+        logging.info("Enhanced HTML saved to page_debug_enhanced.html")
+        
+        # Use enhanced content if it has more matches
+        if enhanced_match_count > best_match_count:
+            best_content = enhanced_content
+            best_match_count = enhanced_match_count
+            content_source = "enhanced"
+            logging.info(f"Enhanced scroll returned more matches ({enhanced_match_count} vs {best_match_count})")
+        else:
+            logging.info(f"Enhanced scroll did not return more matches ({enhanced_match_count} vs {best_match_count})")
+    else:
+        logging.warning("Enhanced scroll failed to return content")
+    
+    # Try a third approach with ultra-aggressive settings if we still have the same count
+    if best_match_count <= len(initial_match_cards):
+        logging.info("Trying ultra-aggressive scroll approach with Selenium-like behavior...")
+        
+        # Custom JavaScript that exactly replicates your Selenium script behavior
+        selenium_like_js = """
+        console.log('Starting Selenium-like scroll simulation...');
+        
+        const MAX_SCROLL_ATTEMPTS = 10;
+        const SCROLL_PAUSE_TIME = 3000;
+        const TARGET_MATCH_COUNT = 100;
+        
+        let lastHeight = document.body.scrollHeight;
+        let matchElementsCountBeforeScroll = 0;
+        
+        console.log('Initial page loaded. Starting scroll...');
+        
+        for (let i = 0; i < MAX_SCROLL_ATTEMPTS; i++) {
+            console.log(`Scroll attempt ${i + 1}/${MAX_SCROLL_ATTEMPTS}`);
+            
+            // Scroll to bottom exactly like Selenium
+            window.scrollTo(0, document.body.scrollHeight);
+            
+            // Wait for content to load
+            await new Promise(resolve => setTimeout(resolve, SCROLL_PAUSE_TIME));
+            
+            const newHeight = document.body.scrollHeight;
+            const currentMatchElements = document.querySelectorAll('sports-events-event-card');
+            const currentMatchElementsCount = currentMatchElements.length;
+            
+            console.log(`Height: ${newHeight}, Match elements: ${currentMatchElementsCount}`);
+            
+            // Check if we've reached target
+            if (TARGET_MATCH_COUNT > 0 && currentMatchElementsCount >= TARGET_MATCH_COUNT) {
+                console.log(`Target match count (${TARGET_MATCH_COUNT}) reached. Stopping scroll.`);
+                break;
+            }
+            
+            // Check if no new content loaded
+            if (newHeight === lastHeight && currentMatchElementsCount === matchElementsCountBeforeScroll) {
+                console.log('No new content loaded. Stopping scroll.');
+                break;
+            }
+            
+            lastHeight = newHeight;
+            matchElementsCountBeforeScroll = currentMatchElementsCount;
+            
+            // Additional pause like in Selenium script
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        const finalMatchCount = document.querySelectorAll('sports-events-event-card').length;
+        console.log(`Scroll completed. Final match count: ${finalMatchCount}`);
+        """
+        
+        try:
+            ultra_params = {
+                'api_key': SCRAPERAPI_KEY,
+                'url': url,
+                'render': 'true',
+                'country_code': 'fr',
+                'device_type': 'desktop',
+                'premium': 'true',
+                'ultra_premium': 'true',
+                'session_number': random.randint(1, 10000),
+                'keep_headers': 'true',
+                'wait': '60000',  # Wait 60 seconds for full scroll sequence
+                'js': selenium_like_js,  # Use Selenium-like JavaScript
+                'screenshot': 'false'
+            }
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+            }
+            
+            response = requests.get(SCRAPERAPI_ENDPOINT, params=ultra_params, headers=headers, timeout=180)
+            
+            if response.status_code == 200:
+                ultra_content = response.text
+                if "Error 403" not in ultra_content and "Forbidden" not in ultra_content:
+                    ultra_soup = BeautifulSoup(ultra_content, "html.parser")
+                    ultra_match_cards = ultra_soup.find_all("sports-events-event-card")
+                    ultra_match_count = len(ultra_match_cards)
+                    
+                    logging.info(f"Ultra-aggressive approach found {ultra_match_count} match cards")
+                    
+                    # Save ultra content for debugging
+                    with open("page_debug_ultra.html", "w", encoding="utf-8") as f:
+                        f.write(ultra_content)
+                    logging.info("Ultra HTML saved to page_debug_ultra.html")
+                    
+                    if ultra_match_count > best_match_count:
+                        best_content = ultra_content
+                        best_match_count = ultra_match_count
+                        content_source = "ultra"
+                        logging.info(f"Ultra-aggressive approach returned more matches ({ultra_match_count})")
+                    else:
+                        logging.info(f"Ultra-aggressive approach did not improve match count ({ultra_match_count})")
+                else:
+                    logging.warning("Ultra-aggressive approach received 403 error")
+            else:
+                logging.warning(f"Ultra-aggressive approach returned status code {response.status_code}")
+                
+        except Exception as e:
+            logging.error(f"Ultra-aggressive approach failed: {e}")
+    
+    final_content = best_content
+    logging.info(f"Using {content_source} content with {best_match_count} matches")
+    
+    # Save final content for debugging
+    with open("page_debug.html", "w", encoding="utf-8") as f:
+        f.write(final_content)
+    logging.info("Final HTML saved to page_debug.html")
+    
+    soup = BeautifulSoup(final_content, "html.parser")
     
     matches = []
     seen_urls = set()
     scraped_dt = datetime.now()
     
-    # Find match cards
-    match_cards = soup.find_all("sports-events-event-card")
-    logging.info(f"Found {len(match_cards)} match cards")
+    # First try to extract JSON data from the page
+    json_matches = []
+    try:
+        # Look for embedded JSON data in script tags
+        script_tags = soup.find_all("script")
+        for script in script_tags:
+            if script.string and '"matches":[' in script.string:
+                # Extract JSON data containing matches
+                script_content = script.string
+                # Find the matches array in the JSON
+                start_idx = script_content.find('"matches":[')
+                if start_idx != -1:
+                    # Find the end of the matches array
+                    bracket_count = 0
+                    start_bracket = script_content.find('[', start_idx)
+                    current_idx = start_bracket
+                    
+                    while current_idx < len(script_content):
+                        if script_content[current_idx] == '[':
+                            bracket_count += 1
+                        elif script_content[current_idx] == ']':
+                            bracket_count -= 1
+                            if bracket_count == 0:
+                                end_idx = current_idx + 1
+                                break
+                        current_idx += 1
+                    
+                    if bracket_count == 0:
+                        matches_json_str = script_content[start_bracket:end_idx]
+                        try:
+                            import json
+                            json_matches = json.loads(matches_json_str)
+                            logging.info(f"Successfully extracted {len(json_matches)} matches from JSON data")
+                            break
+                        except json.JSONDecodeError as e:
+                            logging.warning(f"Failed to parse JSON matches: {e}")
+                            continue
+    except Exception as e:
+        logging.warning(f"Error extracting JSON data: {e}")
     
-    for card_index, card in enumerate(match_cards):
-        try:
-            current_date = ""
-            current_heure = ""
-            current_tournoi = ""
-            current_tour = ""
-
-            # Extract player names
-            players = card.find_all("div", class_="scoreboard_contestantLabel")
-            player1 = players[0].text.strip() if len(players) > 0 else ""
-            player2 = players[1].text.strip() if len(players) > 1 else ""
-
-            # Extract match URL
-            a_tag = card.find("a", class_="cardEvent")
-            match_url = ""
-            if a_tag and "href" in a_tag.attrs:
-                match_url = "https://www.betclic.fr" + a_tag["href"]
-
-            if not match_url or match_url in seen_urls:
-                logging.debug(f"Match {player1} vs {player2} ignored (empty URL or already seen: {match_url})")
-                continue
-            seen_urls.add(match_url)
-
-            # Extract full player names from URL slug
-            player1_full, player2_full = player1, player2
-            if a_tag and "href" in a_tag.attrs:
-                match_obj = re.search(r'/([a-z0-9\-]+)-m\d+$', a_tag["href"])
-                if match_obj:
-                    full_slug = match_obj.group(1)
-                    parts = full_slug.split('-')
-                    # Logic to divide player names from slug
-                    n_parts = len(parts)
-                    split_point = n_parts // 2
-                    slug1 = '-'.join(parts[:split_point])
-                    slug2 = '-'.join(parts[split_point:])
-
-                    def slug_to_name(slug):
-                        return ' '.join([x.capitalize() for x in slug.replace('-', ' ').split()])
-
-                    player1_full = slug_to_name(slug1)
-                    player2_full = slug_to_name(slug2)
-
-            # Extract date and time
-            event_info_time = card.find("div", class_="event_infoTime")
-            if event_info_time and event_info_time.text.strip():
-                date_heure_text = event_info_time.text.strip()
-                # Handle "Auj.", "Dem." and full dates
-                if "Auj." in date_heure_text or "Dem." in date_heure_text:
-                    parts = date_heure_text.split()
-                    if len(parts) >= 2:
-                        current_date = parts[0]  # Can be "Auj." or "Dem."
-                        current_heure = parts[-1]  # Time is always the last part
-                else:  # e.g., "Jeu. 01/01 15:00"
-                    parts = date_heure_text.split()
-                    if len(parts) == 3:  # "Jeu. 01/01 15:00"
-                        current_date = f"{parts[0]} {parts[1]}"  # "Jeu. 01/01"
-                        current_heure = parts[2]  # "15:00"
-                    elif len(parts) == 2:  # Case "01/01 15:00"
-                        current_date = parts[0]
-                        current_heure = parts[1]
-
-            # Extract tournament name from URL
-            if a_tag and "href" in a_tag.attrs:
-                url_parts = a_tag["href"].split("/")
-                if len(url_parts) > 2:
-                    tournoi_slug_full = url_parts[2]
-                    # Take everything before the first "-c" followed by digits
-                    tournoi_match = re.match(r"^(.*?)(-c\d+)?$", tournoi_slug_full)
-                    if tournoi_match:
-                        tournoi_slug = tournoi_match.group(1)
-                        current_tournoi = tournoi_slug.replace('-', ' ').title()
+    # If we found JSON matches, use them; otherwise fall back to HTML parsing
+    if json_matches:
+        logging.info(f"Using JSON data with {len(json_matches)} matches")
+        for match_data in json_matches:
+            try:
+                # Extract match information from JSON
+                match_id = match_data.get("matchId", "")
+                match_name = match_data.get("name", "")
+                match_date_utc = match_data.get("matchDateUtc", "")
+                
+                # Parse contestants
+                contestants = match_data.get("contestants", [])
+                if len(contestants) >= 2:
+                    player1 = contestants[0].get("name", "")
+                    player2 = contestants[1].get("name", "")
+                    
+                    # Extract competition info
+                    competition = match_data.get("competition", {})
+                    tournoi = competition.get("name", "")
+                    
+                    # Parse date and time
+                    if match_date_utc:
+                        try:
+                            match_dt = datetime.fromisoformat(match_date_utc.replace('Z', '+00:00'))
+                            date_str = match_dt.strftime("%d/%m")
+                            heure_str = match_dt.strftime("%H:%M")
+                        except:
+                            date_str = "Unknown"
+                            heure_str = "Unknown"
                     else:
-                        current_tournoi = tournoi_slug_full.replace('-', ' ').title()
+                        date_str = "Unknown"
+                        heure_str = "Unknown"
+                    
+                    # Construct match URL
+                    if player1 and player2 and match_id:
+                        # Create URL slug from player names
+                        def name_to_slug(name):
+                            return name.lower().replace(" ", "-").replace(".", "")
+                        
+                        player1_slug = name_to_slug(player1)
+                        player2_slug = name_to_slug(player2)
+                        competition_slug = name_to_slug(tournoi) if tournoi else "unknown"
+                        
+                        match_url = f"https://www.betclic.fr/tennis-stennis/{competition_slug}/{player1_slug}-{player2_slug}-m{match_id}"
+                        
+                        if match_url not in seen_urls:
+                            seen_urls.add(match_url)
+                            
+                            match_info = {
+                                "date": date_str,
+                                "heure": heure_str,
+                                "tournoi": tournoi,
+                                "tour": "",
+                                "player1": player1,
+                                "player2": player2,
+                                "scraped_date": scraped_dt.strftime("%Y-%m-%d"),
+                                "scraped_time": scraped_dt.strftime("%H:%M:%S"),
+                                "match_url": match_url
+                            }
+                            
+                            matches.append(match_info)
+                            logging.info(f"JSON Match {len(matches)}/{len(json_matches)}: {player1} vs {player2} | Date: {date_str}, Heure: {heure_str} | Tournoi: {tournoi} | URL: {match_url}")
+                            
+            except Exception as e:
+                logging.warning(f"Error processing JSON match: {e}")
+                continue
+    
+    # If no JSON matches found, fall back to HTML parsing
+    if not matches:
+        logging.info("No JSON matches found, falling back to HTML parsing")
+        # Find match cards
+        match_cards = soup.find_all("sports-events-event-card")
+        logging.info(f"Found {len(match_cards)} match cards after scroll simulation")
+        
+        for card_index, card in enumerate(match_cards):
+            try:
+                current_date = ""
+                current_heure = ""
+                current_tournoi = ""
+                current_tour = ""
 
-            logging.info(
-                f"Match {card_index + 1}/{len(match_cards)}: {player1_full} vs {player2_full} | Date: {current_date}, Heure: {current_heure} | Tournoi: {current_tournoi} | URL: {match_url}")
+                # Extract player names
+                players = card.find_all("div", class_="scoreboard_contestantLabel")
+                player1 = players[0].text.strip() if len(players) > 0 else ""
+                player2 = players[1].text.strip() if len(players) > 1 else ""
 
-            matches.append({
-                "date": current_date,
-                "heure": current_heure,
-                "tournoi": current_tournoi,
-                "tour": current_tour,
-                "player1": player1_full,
-                "player2": player2_full,
-                "match_url": match_url,
+                # Extract match URL
+                a_tag = card.find("a", class_="cardEvent")
+                match_url = ""
+                if a_tag and "href" in a_tag.attrs:
+                    match_url = "https://www.betclic.fr" + a_tag["href"]
+
+                if not match_url or match_url in seen_urls:
+                    logging.debug(f"Match {player1} vs {player2} ignored (empty URL or already seen: {match_url})")
+                    continue
+                seen_urls.add(match_url)
+
+                # Extract full player names from URL slug with improved logic
+                player1_full, player2_full = player1, player2
+                if a_tag and "href" in a_tag.attrs:
+                    match_obj = re.search(r'/([a-z0-9\-]+)-m\d+$', a_tag["href"])
+                    if match_obj:
+                        full_slug = match_obj.group(1)
+                        parts = full_slug.split('-')
+                        
+                        # Improved logic to divide player names from slug
+                        # Try to find common patterns and known separators
+                        def slug_to_name(slug):
+                            return ' '.join([x.capitalize() for x in slug.replace('-', ' ').split()])
+                        
+                        # Try different splitting strategies
+                        n_parts = len(parts)
+                        
+                        # Strategy 1: Look for "vs" in the slug (rare but possible)
+                        if 'vs' in parts:
+                            vs_index = parts.index('vs')
+                            slug1 = '-'.join(parts[:vs_index])
+                            slug2 = '-'.join(parts[vs_index+1:])
+                            player1_full = slug_to_name(slug1)
+                            player2_full = slug_to_name(slug2)
+                        # Strategy 2: Use the displayed names to guide the split
+                        elif player1 and player2:
+                            # Count words in displayed names to estimate split point
+                            p1_words = len(player1.split())
+                            p2_words = len(player2.split())
+                            
+                            # If we have a good estimate, use it
+                            if p1_words + p2_words <= n_parts:
+                                slug1 = '-'.join(parts[:p1_words])
+                                slug2 = '-'.join(parts[p1_words:])
+                                player1_full = slug_to_name(slug1)
+                                player2_full = slug_to_name(slug2)
+                            else:
+                                # Fallback to middle split
+                                split_point = n_parts // 2
+                                slug1 = '-'.join(parts[:split_point])
+                                slug2 = '-'.join(parts[split_point:])
+                                player1_full = slug_to_name(slug1)
+                                player2_full = slug_to_name(slug2)
+                        else:
+                            # Strategy 3: Default middle split
+                            split_point = n_parts // 2
+                            slug1 = '-'.join(parts[:split_point])
+                            slug2 = '-'.join(parts[split_point:])
+                            player1_full = slug_to_name(slug1)
+                            player2_full = slug_to_name(slug2)
+                        
+                        # Validation: if the extracted names are too different from displayed names,
+                        # fall back to displayed names
+                        if player1 and player2:
+                            # Simple similarity check
+                            p1_similarity = len(set(player1.lower().split()) & set(player1_full.lower().split()))
+                            p2_similarity = len(set(player2.lower().split()) & set(player2_full.lower().split()))
+                            
+                            if p1_similarity == 0:  # No common words
+                                player1_full = player1
+                            if p2_similarity == 0:  # No common words
+                                player2_full = player2
+
+                # Extract date and time
+                event_info_time = card.find("div", class_="event_infoTime")
+                if event_info_time and event_info_time.text.strip():
+                    date_heure_text = event_info_time.text.strip()
+                    # Handle "Auj.", "Dem." and full dates
+                    if "Auj." in date_heure_text or "Dem." in date_heure_text:
+                        parts = date_heure_text.split()
+                        if len(parts) >= 2:
+                            current_date = parts[0]  # Can be "Auj." or "Dem."
+                            current_heure = parts[-1]  # Time is always the last part
+                    else:  # e.g., "Jeu. 01/01 15:00"
+                        parts = date_heure_text.split()
+                        if len(parts) == 3:  # "Jeu. 01/01 15:00"
+                            current_date = f"{parts[0]} {parts[1]}"  # "Jeu. 01/01"
+                            current_heure = parts[2]  # "15:00"
+                        elif len(parts) == 2:  # Case "01/01 15:00"
+                            current_date = parts[0]
+                            current_heure = parts[1]
+
+                # Extract tournament name from URL
+                if a_tag and "href" in a_tag.attrs:
+                    url_parts = a_tag["href"].split("/")
+                    if len(url_parts) > 2:
+                        tournoi_slug_full = url_parts[2]
+                        # Take everything before the first "-c" followed by digits
+                        tournoi_match = re.match(r"^(.*?)(-c\d+)?$", tournoi_slug_full)
+                        if tournoi_match:
+                            tournoi_slug = tournoi_match.group(1)
+                            current_tournoi = tournoi_slug.replace('-', ' ').title()
+                        else:
+                            current_tournoi = tournoi_slug_full.replace('-', ' ').title()
+
+                logging.info(
+                    f"Match {card_index + 1}/{len(match_cards)}: {player1_full} vs {player2_full} | Date: {current_date}, Heure: {current_heure} | Tournoi: {current_tournoi} | URL: {match_url}")
+
+                matches.append({
+                    "date": current_date,
+                    "heure": current_heure,
+                    "tournoi": current_tournoi,
+                    "tour": current_tour,
+                    "player1": player1_full,
+                    "player2": player2_full,
+                    "match_url": match_url,
                 "scraped_date": scraped_dt.date().isoformat(),
                 "scraped_time": scraped_dt.time().strftime("%H:%M:%S"),
             })
 
-        except Exception as e:
-            logging.error(f"Error processing match card {card_index}: {e}")
-            continue
+            except Exception as e:
+                logging.error(f"Error processing match card {card_index}: {e}")
+                continue
 
     logging.info(f"Total matches extracted: {len(matches)}")
     return matches
