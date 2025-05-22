@@ -5,7 +5,7 @@ services:
     region: frankfurt
     plan: starter
     schedule: "0 5,13,21 * * *"  # Exécution à 5h, 13h, et 21h tous les jours
-    dockerCommand: python betclic_scraper_v2.py
+    dockerCommand: python betclic_scraper_hybrid.py
     envVars:
       - key: SUPABASE_URL
         sync: false
