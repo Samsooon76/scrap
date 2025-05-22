@@ -142,8 +142,10 @@ def get_scraperapi_response(url, retries=3):
         'keep_headers': 'true',  # Keep original headers
         'autoparse': 'false',  # Disable autoparse for better control
         'format': 'html',  # Ensure HTML format
-        'wait': '10000',  # Wait 10 seconds for page to load
+        'wait': '20000',  # Increased from 10s to 20s for better loading
         'scroll': 'true',  # Enable scrolling to load dynamic content
+        'scroll_count': '10',  # Number of scrolls to perform
+        'scroll_timeout': '3000',  # Wait 3s between scrolls
         'screenshot': 'false'  # Disable screenshot to save bandwidth
     }
     
@@ -271,6 +273,15 @@ def scrape_with_selenium(url):
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-web-security")
+    chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    chrome_options.add_argument("--disable-renderer-backgrounding")
+    chrome_options.add_argument("--disable-field-trial-config")
+    chrome_options.add_argument("--disable-ipc-flooding-protection")
+    chrome_options.add_argument("--single-process")  # For cloud environments
+    chrome_options.add_argument("--remote-debugging-port=9222")
     chrome_options.add_argument(
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.5735.110 Safari/537.36"
     )
@@ -482,6 +493,8 @@ def scrape_betclic_matches():
                                 
                                 scraped_dt = datetime.now()
                                 seen_urls = set()
+                                processed_matches = 0
+                                skipped_matches = 0
                                 
                                 for match_data in json_matches:
                                     try:
@@ -533,10 +546,20 @@ def scrape_betclic_matches():
                                                     }
                                                     
                                                     scraperapi_matches.append(match_info)
+                                                    processed_matches += 1
+                                                else:
+                                                    logging.debug(f"Duplicate URL skipped: {match_url}")
+                                                    skipped_matches += 1
+                                            else:
+                                                logging.debug(f"Match skipped - missing data: player1={player1}, player2={player2}, match_id={match_id}")
+                                                skipped_matches += 1
                                                     
                                     except Exception as e:
                                         logging.warning(f"Error processing JSON match: {e}")
+                                        skipped_matches += 1
                                         continue
+                                # Add summary log after processing all matches
+                                logging.info(f"ScraperAPI JSON processing complete: {processed_matches} matches added, {skipped_matches} skipped")
                                 break
                             except json.JSONDecodeError as e:
                                 logging.warning(f"Failed to parse JSON matches: {e}")
@@ -544,16 +567,76 @@ def scrape_betclic_matches():
         except Exception as e:
             logging.warning(f"Error extracting JSON data from ScraperAPI: {e}")
         
-        # If no JSON matches, try HTML parsing
-        if not scraperapi_matches:
-            logging.info("No JSON matches found in ScraperAPI response, trying HTML parsing...")
-            match_cards = soup.find_all("sports-events-event-card")
-            logging.info(f"ScraperAPI: Found {len(match_cards)} match cards via HTML parsing")
-            # Could implement HTML parsing here if needed
+        # Try HTML parsing as well to get more matches
+        match_cards = soup.find_all("sports-events-event-card")
+        logging.info(f"ScraperAPI: Found {len(match_cards)} match cards via HTML parsing")
+        
+        # If HTML parsing finds more matches, use it as supplement
+        html_matches = []
+        if match_cards:
+            scraped_dt = datetime.now()
+            seen_urls_html = set([match['match_url'] for match in scraperapi_matches])  # URLs already found in JSON
+            
+            for card in match_cards:
+                try:
+                    # Try to extract basic info from HTML card
+                    players = card.find_all("div", class_="scoreboard_contestantLabel")
+                    if len(players) >= 2:
+                        player1 = players[0].get_text(strip=True)
+                        player2 = players[1].get_text(strip=True)
+                        
+                        # Look for match URL
+                        a_tag = card.find("a")
+                        if a_tag and a_tag.get("href"):
+                            match_url = "https://www.betclic.fr" + a_tag["href"]
+                            
+                            if match_url not in seen_urls_html:
+                                seen_urls_html.add(match_url)
+                                
+                                # Extract tournament info from URL
+                                url_parts = a_tag["href"].split("/")
+                                tournoi = ""
+                                if len(url_parts) > 2:
+                                    tournoi_slug = url_parts[2]
+                                    tournoi = tournoi_slug.replace('-', ' ').title()
+                                
+                                match_info = {
+                                    "date": "Unknown",
+                                    "heure": "Unknown", 
+                                    "tournoi": tournoi,
+                                    "tour": "",
+                                    "player1": player1,
+                                    "player2": player2,
+                                    "scraped_date": scraped_dt.strftime("%Y-%m-%d"),
+                                    "scraped_time": scraped_dt.strftime("%H:%M:%S"),
+                                    "match_url": match_url
+                                }
+                                
+                                html_matches.append(match_info)
+                                
+                except Exception as e:
+                    logging.debug(f"Error parsing HTML match card: {e}")
+                    continue
+        
+        # Combine JSON and HTML results
+        total_matches = scraperapi_matches + html_matches
+        logging.info(f"ScraperAPI total: {len(scraperapi_matches)} from JSON + {len(html_matches)} from HTML = {len(total_matches)} matches")
+        scraperapi_matches = total_matches
     
     # Decide whether to use ScraperAPI results or fallback to Selenium
-    if len(scraperapi_matches) > 40:  # If we got more than 40 matches, ScraperAPI worked well
-        logging.info(f"ScraperAPI successful: {len(scraperapi_matches)} matches found. Using ScraperAPI results.")
+    scraperapi_threshold = 40  # Target threshold for good ScraperAPI results
+    
+    # Check if we're in a cloud environment (Render, Heroku, etc.)
+    is_cloud_env = any(env_var in os.environ for env_var in ['RENDER', 'HEROKU', 'DYNO', 'RAILWAY_ENVIRONMENT'])
+    
+    logging.info(f"ScraperAPI found {len(scraperapi_matches)} matches. Cloud environment: {is_cloud_env}")
+    
+    if len(scraperapi_matches) >= scraperapi_threshold:
+        logging.info(f"ScraperAPI successful: {len(scraperapi_matches)} matches found (>= {scraperapi_threshold}). Using ScraperAPI results.")
+        return scraperapi_matches
+    elif is_cloud_env and len(scraperapi_matches) > 20:
+        # In cloud environments, use ScraperAPI if we have a reasonable number of matches
+        logging.info(f"Cloud environment detected. Using ScraperAPI results ({len(scraperapi_matches)} matches) instead of Selenium fallback.")
         return scraperapi_matches
     else:
         logging.info(f"ScraperAPI returned only {len(scraperapi_matches)} matches. Falling back to Selenium...")
