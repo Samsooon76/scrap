@@ -118,28 +118,33 @@ def get_scraperapi_response(url, retries=3):
     Simple and reliable ScraperAPI request optimized for Render
     """
     is_render = 'RENDER' in os.environ
+    env_type = "RENDER" if is_render else "LOCAL"
     
-    # Aggressive scrolling parameters to load ALL matches
-    params = {
+    # Patient and persistent scrolling parameters
+    base_params = {
         'api_key': SCRAPERAPI_KEY,
         'url': url,
         'render': 'true',
         'country_code': 'fr',
         'device_type': 'desktop',
         'premium': 'true',
-        'session_number': random.randint(1, 1000),
         'keep_headers': 'true',
         'autoparse': 'false',
         'format': 'html',
-        'wait': '60000',  # 60s pour laisser charger complètement
-        'scroll': 'true',
-        'scroll_count': '150' if is_render else '200',  # BEAUCOUP plus de scrolls
-        'scroll_timeout': '5000',  # 5s entre chaque scroll
-        'scroll_pause_time': '3000',  # 3s de pause entre scrolls
         'screenshot': 'false',
         'scroll_to_bottom': 'true',  # Force scroll jusqu'en bas
         'execute_script': 'window.scrollTo(0, document.body.scrollHeight);'  # JavaScript pour forcer le scroll
     }
+    
+    # Initial attempt parameters (more patient)
+    current_params = base_params.copy()
+    current_params.update({
+        'wait': '75000',  # 75s for initial full load (very patient)
+        'scroll': 'true',
+        'scroll_count': '75' if is_render else '100',  # Fewer scrolls, but more spaced out
+        'scroll_timeout': '8000',  # 8s timeout for each scroll action (very patient)
+        'scroll_pause_time': '5000',  # 5s pause between each scroll (very patient)
+    })
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
@@ -149,60 +154,61 @@ def get_scraperapi_response(url, retries=3):
         'Connection': 'keep-alive'
     }
     
-    timeout = 120 if is_render else 150  # Timeout plus long pour le scrolling intensif
-    env_type = "RENDER" if is_render else "LOCAL"
+    timeout = 180 if is_render else 240  # Long timeout for patient strategy
     
     for attempt in range(retries):
+        current_params['session_number'] = random.randint(1, 1000) # New session for each attempt
+        
+        current_scroll_count_log = current_params['scroll_count']
+        current_wait_log = int(current_params['wait']) / 1000  # Convert to seconds for logging
+        current_scroll_timeout_log = current_params['scroll_timeout']
+        current_scroll_pause_time_log = current_params['scroll_pause_time']
+        
+        logging.info(f"[{env_type}] Fetching {url} via ScraperAPI (attempt {attempt + 1}/{retries})")
+        logging.info(f"[{env_type}] Scrolling config: wait={current_wait_log}s, scrolls={current_scroll_count_log}, scroll_timeout={current_scroll_timeout_log}ms, scroll_pause={current_scroll_pause_time_log}ms")
+        
         try:
-            current_scroll_count = params['scroll_count']
-            current_wait = int(params['wait']) / 1000  # Convert to seconds for logging
-            
-            logging.info(f"[{env_type}] Fetching {url} via ScraperAPI (attempt {attempt + 1}/{retries})")
-            logging.info(f"[{env_type}] Scrolling config: wait={current_wait}s, scroll_count={current_scroll_count}, timeout={params['scroll_timeout']}ms")
-            
-            params['session_number'] = random.randint(1, 1000)
-            response = requests.get(SCRAPERAPI_ENDPOINT, params=params, headers=headers, timeout=timeout)
+            response = requests.get(SCRAPERAPI_ENDPOINT, params=current_params, headers=headers, timeout=timeout)
             
             if response.status_code == 200:
                 content = response.text
                 if "Error 403" in content or "Forbidden" in content:
                     logging.warning(f"[{env_type}] Received 403 Forbidden (attempt {attempt + 1})")
-                    if attempt < retries - 1:
-                        time.sleep(5)
-                        continue
                 else:
                     if 'sports-events-event-card' in content:
                         card_count = content.count('sports-events-event-card')
-                        logging.info(f"[{env_type}] Success! Content: {len(content)} chars, Cards: {card_count}")
+                        logging.info(f"[{env_type}] Success! Content: {len(content)} chars, Raw HTML Cards: {card_count}")
                         
-                        # Validation: s'assurer qu'on a un nombre raisonnable de matches
-                        if card_count < 30:
-                            logging.warning(f"[{env_type}] Only {card_count} cards found - might need more scrolling")
+                        # Validation: Aim for a higher number of cards now
+                        # Betclic seems to have around 100-200+ matches typically
+                        # If we see < 70 raw cards, it implies incomplete loading
+                        if card_count < 70: # Stricter validation
+                            logging.warning(f"[{env_type}] Only {card_count} raw HTML cards found - indicates incomplete load.")
                             if attempt < retries - 1:
-                                logging.info(f"[{env_type}] Retrying with more aggressive scrolling...")
-                                # Increase scroll count for retry
-                                params['scroll_count'] = str(int(params['scroll_count']) + 50)
-                                params['wait'] = '90000'  # 90s wait for retry
-                                time.sleep(10)
+                                logging.info(f"[{env_type}] Retrying with even MORE patient scrolling...")
+                                # Make retry parameters even more patient
+                                current_params['scroll_count'] = str(int(current_params['scroll_count']) + 25) # More scrolls
+                                current_params['wait'] = str(int(current_params['wait']) + 15000) # Longer wait (e.g., 75s -> 90s)
+                                current_params['scroll_timeout'] = str(int(current_params['scroll_timeout']) + 2000) # Longer scroll timeout
+                                current_params['scroll_pause_time'] = str(int(current_params['scroll_pause_time']) + 2000) # Longer pause
+                                time.sleep(15) # Longer sleep before retry
                                 continue
-                        
                         return content
                     else:
-                        logging.warning(f"[{env_type}] No match cards found (attempt {attempt + 1})")
-                        if attempt < retries - 1:
-                            time.sleep(5)
-                            continue
+                        logging.warning(f"[{env_type}] No 'sports-events-event-card' markers found (attempt {attempt + 1})")
             else:
                 logging.warning(f"[{env_type}] ScraperAPI status {response.status_code} (attempt {attempt + 1})")
-                if attempt < retries - 1:
-                    time.sleep(5)
-                    
+                
+        except requests.exceptions.Timeout:
+            logging.error(f"[{env_type}] ScraperAPI request timed out after {timeout}s (attempt {attempt + 1})")
         except Exception as e:
-            logging.error(f"[{env_type}] Request failed: {e}")
-            if attempt < retries - 1:
-                time.sleep(5)
-    
-    logging.error(f"[{env_type}] Failed to fetch {url} after {retries} attempts")
+            logging.error(f"[{env_type}] Request failed: {e} (attempt {attempt + 1})")
+        
+        if attempt < retries - 1:
+            logging.info(f"[{env_type}] Waiting before next retry...")
+            time.sleep(10 + attempt * 5) # Exponential backoff for retries
+            
+    logging.error(f"[{env_type}] Failed to fetch {url} with sufficient cards after {retries} attempts")
     return None
 
 def extract_json_matches(soup):
