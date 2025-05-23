@@ -534,9 +534,11 @@ def player_to_tennisabstract_url(player_name_on_site):
     return f"https://www.tennisabstract.com/cgi-bin/player.cgi?p={normalized_for_url}"
 
 def find_best_slug_url(name, elo_df_local):
-    """Find the best matching player URL from ELO data"""
+    """Find the best matching player URL from ELO data
+    Returns: (url, found_in_elo_db)
+    """
     if elo_df_local.empty:
-        return player_to_tennisabstract_url(name)
+        return player_to_tennisabstract_url(name), False
 
     norm_name_site = normalize_name(name)
 
@@ -546,7 +548,7 @@ def find_best_slug_url(name, elo_df_local):
     if not exact_match.empty:
         matched_elo_name = exact_match['player'].iloc[0]
         logging.debug(f"Exact match for '{name}' -> '{matched_elo_name}'")
-        return player_to_tennisabstract_url(matched_elo_name)
+        return player_to_tennisabstract_url(matched_elo_name), True
 
     # Try approximate match
     names_list_elo = elo_df_local['normalized_player'].tolist()
@@ -558,11 +560,11 @@ def find_best_slug_url(name, elo_df_local):
         if not original_elo_name_series.empty:
             original_elo_name = original_elo_name_series.iloc[0]
             logging.debug(f"Close match for '{name}' ({norm_name_site}) -> '{original_elo_name}' ({matched_normalized_name})")
-            return player_to_tennisabstract_url(original_elo_name)
+            return player_to_tennisabstract_url(original_elo_name), True
 
-    # Fallback
+    # Fallback - player not found in ELO DB
     logging.warning(f"No close match for '{name}' in Elo DB. Using direct conversion.")
-    return player_to_tennisabstract_url(name)
+    return player_to_tennisabstract_url(name), False
 
 def main():
     """Main function with single, reliable strategy"""
@@ -604,12 +606,12 @@ def main():
 
         # Generate Tennis Abstract URLs
         logging.info(f"[{env_type}] Generating Tennis Abstract URLs...")
-        df["player1_url"] = df["player1"].apply(lambda n: find_best_slug_url(n, elo_df))
-        df["player2_url"] = df["player2"].apply(lambda n: find_best_slug_url(n, elo_df))
+        df["player1_url"], df["player1_found_in_elo_db"] = zip(*df["player1"].apply(lambda n: find_best_slug_url(n, elo_df)))
+        df["player2_url"], df["player2_found_in_elo_db"] = zip(*df["player2"].apply(lambda n: find_best_slug_url(n, elo_df)))
 
         # Prepare final columns
         final_columns = ["date", "heure", "tournoi", "tour", "player1", "player2", "match_url",
-                         "player1_url", "player2_url", "scraped_date", "scraped_time"]
+                         "player1_url", "player2_url", "scraped_date", "scraped_time", "player1_found_in_elo_db", "player2_found_in_elo_db"]
 
         for col in final_columns:
             if col not in df.columns:
@@ -617,8 +619,16 @@ def main():
 
         df_for_upload = df[final_columns].copy()
 
-        # Keep ALL matches for both Render and Local (no ELO filtering)
-        logging.info(f"[{env_type}] Keeping all {len(df_for_upload)} matches (no ELO filtering)")
+        # Apply ELO filtering - only keep matches where both players are found in ELO database
+        matches_before_elo_filter = len(df_for_upload)
+        elo_condition = (df_for_upload["player1_found_in_elo_db"] == True) & (df_for_upload["player2_found_in_elo_db"] == True)
+        df_for_upload = df_for_upload[elo_condition]
+        matches_after_elo_filter = len(df_for_upload)
+        
+        logging.info(f"[{env_type}] ELO filtering: {matches_before_elo_filter} → {matches_after_elo_filter} matches (removed {matches_before_elo_filter - matches_after_elo_filter} matches with players not in ELO DB)")
+
+        # Remove the ELO indicator columns before upload (not needed in database)
+        df_for_upload = df_for_upload.drop(columns=["player1_found_in_elo_db", "player2_found_in_elo_db"])
 
         # Delete old matches
         logging.info(f"[{env_type}] Deleting old matches from 'upcoming_matches' table...")
