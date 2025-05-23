@@ -115,12 +115,11 @@ SCRAPERAPI_ENDPOINT = "http://api.scraperapi.com"
 
 def get_scraperapi_response(url, retries=3):
     """
-    Simple and reliable ScraperAPI request optimized for Render
+    Patient and frequent ScraperAPI request to maximize content loading.
     """
     is_render = 'RENDER' in os.environ
     env_type = "RENDER" if is_render else "LOCAL"
     
-    # Patient and persistent scrolling parameters
     base_params = {
         'api_key': SCRAPERAPI_KEY,
         'url': url,
@@ -132,18 +131,17 @@ def get_scraperapi_response(url, retries=3):
         'autoparse': 'false',
         'format': 'html',
         'screenshot': 'false',
-        'scroll_to_bottom': 'true',  # Force scroll jusqu'en bas
-        'execute_script': 'window.scrollTo(0, document.body.scrollHeight);'  # JavaScript pour forcer le scroll
+        'scroll_to_bottom': 'true',
+        'execute_script': 'window.scrollTo(0, document.body.scrollHeight);'
     }
     
-    # Initial attempt parameters (more patient)
     current_params = base_params.copy()
     current_params.update({
-        'wait': '75000',  # 75s for initial full load (very patient)
+        'wait': '60000',  # 60s for initial page load
         'scroll': 'true',
-        'scroll_count': '75' if is_render else '100',  # Fewer scrolls, but more spaced out
-        'scroll_timeout': '8000',  # 8s timeout for each scroll action (very patient)
-        'scroll_pause_time': '5000',  # 5s pause between each scroll (very patient)
+        'scroll_count': '200' if is_render else '250',  # Many frequent scrolls
+        'scroll_timeout': '3000',  # 3s for each scroll action
+        'scroll_pause_time': '500',  # 500ms pause between each scroll (frequent)
     })
     
     headers = {
@@ -154,18 +152,22 @@ def get_scraperapi_response(url, retries=3):
         'Connection': 'keep-alive'
     }
     
-    timeout = 180 if is_render else 240  # Long timeout for patient strategy
+    # Timeout needs to be long enough for all scrolls: scroll_count * (scroll_pause_time + scroll_timeout roughly) + wait
+    # Example: 200 * (0.5s + 3s) = 200 * 3.5s = 700s. This is too long.
+    # ScraperAPI likely has its own internal cap for total scroll time. 
+    # Let's set a generous overall timeout.
+    timeout = 240 if is_render else 300  # 4-5 minutes overall timeout
     
     for attempt in range(retries):
-        current_params['session_number'] = random.randint(1, 1000) # New session for each attempt
+        current_params['session_number'] = random.randint(1, 1000)
         
         current_scroll_count_log = current_params['scroll_count']
-        current_wait_log = int(current_params['wait']) / 1000  # Convert to seconds for logging
+        current_wait_log = int(current_params['wait']) / 1000
         current_scroll_timeout_log = current_params['scroll_timeout']
         current_scroll_pause_time_log = current_params['scroll_pause_time']
         
         logging.info(f"[{env_type}] Fetching {url} via ScraperAPI (attempt {attempt + 1}/{retries})")
-        logging.info(f"[{env_type}] Scrolling config: wait={current_wait_log}s, scrolls={current_scroll_count_log}, scroll_timeout={current_scroll_timeout_log}ms, scroll_pause={current_scroll_pause_time_log}ms")
+        logging.info(f"[{env_type}] Scrolling config: wait={current_wait_log}s, scrolls={current_scroll_count_log}, scroll_timeout={current_scroll_timeout_log}ms, scroll_pause={current_scroll_pause_time_log}ms, overall_timeout={timeout}s")
         
         try:
             response = requests.get(SCRAPERAPI_ENDPOINT, params=current_params, headers=headers, timeout=timeout)
@@ -179,19 +181,15 @@ def get_scraperapi_response(url, retries=3):
                         card_count = content.count('sports-events-event-card')
                         logging.info(f"[{env_type}] Success! Content: {len(content)} chars, Raw HTML Cards: {card_count}")
                         
-                        # Validation: Aim for a higher number of cards now
-                        # Betclic seems to have around 100-200+ matches typically
-                        # If we see < 70 raw cards, it implies incomplete loading
-                        if card_count < 70: # Stricter validation
-                            logging.warning(f"[{env_type}] Only {card_count} raw HTML cards found - indicates incomplete load.")
+                        # Validation: Aim for at least 100 raw HTML cards
+                        if card_count < 100: 
+                            logging.warning(f"[{env_type}] Only {card_count} raw HTML cards found (target >100) - indicates incomplete load.")
                             if attempt < retries - 1:
-                                logging.info(f"[{env_type}] Retrying with even MORE patient scrolling...")
-                                # Make retry parameters even more patient
-                                current_params['scroll_count'] = str(int(current_params['scroll_count']) + 25) # More scrolls
-                                current_params['wait'] = str(int(current_params['wait']) + 15000) # Longer wait (e.g., 75s -> 90s)
-                                current_params['scroll_timeout'] = str(int(current_params['scroll_timeout']) + 2000) # Longer scroll timeout
-                                current_params['scroll_pause_time'] = str(int(current_params['scroll_pause_time']) + 2000) # Longer pause
-                                time.sleep(15) # Longer sleep before retry
+                                logging.info(f"[{env_type}] Retrying with adjusted frequent scrolling...")
+                                current_params['scroll_count'] = str(int(current_params['scroll_count']) + 75) # Even more scrolls
+                                current_params['wait'] = str(int(current_params['wait']) + 10000) # Slightly longer initial wait for retry
+                                current_params['scroll_pause_time'] = str(int(current_params['scroll_pause_time']) + 250) # Slightly longer pause for retry (e.g. 500ms -> 750ms)
+                                time.sleep(10) 
                                 continue
                         return content
                     else:
@@ -206,7 +204,7 @@ def get_scraperapi_response(url, retries=3):
         
         if attempt < retries - 1:
             logging.info(f"[{env_type}] Waiting before next retry...")
-            time.sleep(10 + attempt * 5) # Exponential backoff for retries
+            time.sleep(10 + attempt * 5) 
             
     logging.error(f"[{env_type}] Failed to fetch {url} with sufficient cards after {retries} attempts")
     return None
