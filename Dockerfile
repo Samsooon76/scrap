@@ -42,10 +42,11 @@ COPY player_stats_scraper.py .
 COPY player_stats_scraper_v2.py .
 COPY betclic_scraper_hybrid.py .
 COPY betclic_scraper_render_optimized.py .
+COPY debug_render_env.py .
 COPY atp_elo_ratings_rows.csv .
 
 # Installer les dépendances Python avec --no-cache-dir pour éviter les problèmes de cache
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 # Commande par défaut (à remplacer par le script spécifique dans Render)
-CMD ["python", "betclic_scraper_v2.py"] 
+CMD ["python", "betclic_scraper_render_optimized.py"] 
