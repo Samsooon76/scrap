@@ -36,14 +36,8 @@ WORKDIR /app
 
 # Copier les fichiers nécessaires
 COPY requirements.txt .
-COPY betclic_scraper.py .
-COPY betclic_scraper_v2.py .
-COPY player_stats_scraper.py .
-COPY player_stats_scraper_v2.py .
-COPY betclic_scraper_hybrid.py .
 COPY betclic_scraper_render_optimized.py .
-COPY debug_render_env.py .
-COPY atp_elo_ratings_rows.csv .
+COPY player_stats_scraper.py .
 
 # Installer les dépendances Python avec --no-cache-dir pour éviter les problèmes de cache
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
