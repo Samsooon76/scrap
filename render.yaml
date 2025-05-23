@@ -15,27 +15,12 @@ services:
         sync: false
         
   - type: cron
-    name: render-diagnostic
-    runtime: docker
-    region: frankfurt
-    plan: starter
-    schedule: "*/15 * * * *"  # Toutes les 15 minutes pour diagnostic rapide
-    dockerCommand: python debug_render_env.py
-    envVars:
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-      - key: SCRAPERAPI_KEY
-        sync: false
-        
-  - type: cron
     name: player-stats-scraper
     runtime: docker
     region: frankfurt
     plan: starter
     schedule: "0 3 * * *"  # Exécution à 3h du matin tous les jours
-    dockerCommand: python player_stats_scraper_v2.py
+    dockerCommand: python player_stats_scraper.py
     envVars:
       - key: SUPABASE_URL
         sync: false
