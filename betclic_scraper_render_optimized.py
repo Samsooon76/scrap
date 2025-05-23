@@ -115,133 +115,76 @@ SCRAPERAPI_ENDPOINT = "http://api.scraperapi.com"
 
 def get_scraperapi_response(url, retries=3):
     """
-    Fetch a URL using ScraperAPI optimized for Render environment limitations
+    Simple and reliable ScraperAPI request optimized for Render
     """
-    # Detect if running on Render to use different parameters
     is_render = 'RENDER' in os.environ
     
-    if is_render:
-        # RENDER: Conservative but reliable parameters
-        params = {
-            'api_key': SCRAPERAPI_KEY,
-            'url': url,
-            'render': 'true',
-            'country_code': 'fr',
-            'device_type': 'desktop',
-            'premium': 'true',
-            'session_number': random.randint(1, 1000),
-            'keep_headers': 'true',
-            'autoparse': 'false',
-            'format': 'html',
-            'wait': '45000',  # Plus conservateur pour Render
-            'scroll': 'true',
-            'scroll_count': '30',  # Moins de scrolls mais plus fiables
-            'scroll_timeout': '2000',  # Plus lent mais plus stable
-            'scroll_pause_time': '3000',
-            'js_snippet': '''
-                // Script JS optimisé pour Render
-                console.log("Render-optimized scrolling starting...");
-                
-                // Scroll progressif et patient
-                for(let i = 0; i < 50; i++) {
-                    window.scrollTo(0, document.body.scrollHeight);
-                    await new Promise(resolve => setTimeout(resolve, 300));
-                }
-                
-                // Attendre le chargement
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                
-                // Second passage plus lent
-                for(let i = 0; i < 20; i++) {
-                    window.scrollTo(0, document.body.scrollHeight + i * 200);
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                }
-                
-                console.log("Render scrolling complete");
-            ''',
-            'screenshot': 'false'
-        }
-        timeout = 80  # Timeout plus court pour Render
-        log_prefix = "RENDER-OPTIMIZED"
-    else:
-        # LOCAL: Plus agressif car ça marche en local
-        params = {
-            'api_key': SCRAPERAPI_KEY,
-            'url': url,
-            'render': 'true',
-            'country_code': 'fr',
-            'device_type': 'desktop',
-            'premium': 'true',
-            'session_number': random.randint(1, 1000),
-            'keep_headers': 'true',
-            'autoparse': 'false',
-            'format': 'html',
-            'wait': '60000',  # Plus long en local car ça marche
-            'scroll': 'true',
-            'scroll_count': '100',
-            'scroll_timeout': '1500',
-            'scroll_pause_time': '4000',
-            'js_snippet': '''
-                // Script JS agressif pour local
-                for(let i = 0; i < 150; i++) {
-                    window.scrollTo(0, document.body.scrollHeight);
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                }
-                await new Promise(resolve => setTimeout(resolve, 6000));
-            ''',
-            'screenshot': 'false'
-        }
-        timeout = 120
-        log_prefix = "LOCAL-ENHANCED"
+    # Simple, reliable parameters that work everywhere
+    params = {
+        'api_key': SCRAPERAPI_KEY,
+        'url': url,
+        'render': 'true',
+        'country_code': 'fr',
+        'device_type': 'desktop',
+        'premium': 'true',
+        'session_number': random.randint(1, 1000),
+        'keep_headers': 'true',
+        'autoparse': 'false',
+        'format': 'html',
+        'wait': '30000' if is_render else '45000',  # Plus court pour Render
+        'scroll': 'true',
+        'scroll_count': '20' if is_render else '50',  # Moins pour Render
+        'scroll_timeout': '3000',  # Stable pour tous
+        'scroll_pause_time': '2000',
+        'screenshot': 'false'
+    }
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive'
     }
+    
+    timeout = 60 if is_render else 90
+    env_type = "RENDER" if is_render else "LOCAL"
     
     for attempt in range(retries):
         try:
-            logging.info(f"Fetching {url} via ScraperAPI (attempt {attempt + 1}/{retries}) - {log_prefix}")
+            logging.info(f"[{env_type}] Fetching {url} via ScraperAPI (attempt {attempt + 1}/{retries})")
             
-            # Randomize session for each attempt
             params['session_number'] = random.randint(1, 1000)
-            
             response = requests.get(SCRAPERAPI_ENDPOINT, params=params, headers=headers, timeout=timeout)
             
             if response.status_code == 200:
                 content = response.text
                 if "Error 403" in content or "Forbidden" in content:
-                    logging.warning(f"Received 403 Forbidden page (attempt {attempt + 1})")
+                    logging.warning(f"[{env_type}] Received 403 Forbidden (attempt {attempt + 1})")
                     if attempt < retries - 1:
-                        time.sleep(10)
+                        time.sleep(5)
                         continue
                 else:
-                    # Vérifier si on a du contenu valide
                     if 'sports-events-event-card' in content:
                         card_count = content.count('sports-events-event-card')
-                        logging.info(f"Successfully fetched {url} - Content length: {len(content)}, Match cards: {card_count}")
+                        logging.info(f"[{env_type}] Success! Content: {len(content)} chars, Cards: {card_count}")
                         return content
                     else:
-                        logging.warning(f"Page fetched but no match cards found (attempt {attempt + 1})")
+                        logging.warning(f"[{env_type}] No match cards found (attempt {attempt + 1})")
                         if attempt < retries - 1:
-                            time.sleep(10)
+                            time.sleep(5)
                             continue
             else:
-                logging.warning(f"ScraperAPI returned status code {response.status_code}")
+                logging.warning(f"[{env_type}] ScraperAPI status {response.status_code} (attempt {attempt + 1})")
                 if attempt < retries - 1:
-                    time.sleep(10)
+                    time.sleep(5)
                     
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Request failed: {e}")
+        except Exception as e:
+            logging.error(f"[{env_type}] Request failed: {e}")
             if attempt < retries - 1:
-                time.sleep(10)
+                time.sleep(5)
     
-    logging.error(f"Failed to fetch {url} after {retries} attempts")
+    logging.error(f"[{env_type}] Failed to fetch {url} after {retries} attempts")
     return None
 
 def extract_json_matches(soup):
@@ -531,83 +474,51 @@ def enhanced_deduplication(matches_list):
     logging.info(f"Deduplication complete: {len(matches_list)} → {len(unique_matches)} (removed {duplicate_count} duplicates)")
     return unique_matches
 
-def scrape_betclic_matches():
+def scrape_betclic_simple():
     """
-    Enhanced scraping optimized for Render environment with better deduplication
+    Single, reliable scraping strategy that works on both Render and Local
     """
     url = "https://www.betclic.fr/tennis-stennis"
+    is_render = 'RENDER' in os.environ
+    env_type = "RENDER" if is_render else "LOCAL"
     
-    logging.info("=== ENHANCED BETCLIC SCRAPER FOR RENDER ===")
+    logging.info(f"=== [{env_type}] STARTING BETCLIC SCRAPER ===")
+    
+    # Single reliable request
     page_content = get_scraperapi_response(url)
     
     if not page_content:
-        logging.error("Failed to get page content from ScraperAPI")
+        logging.error(f"[{env_type}] Failed to get page content")
         return []
 
     # Save debug content
-    with open("page_debug_render.html", "w", encoding="utf-8") as f:
+    debug_file = f"page_debug_{env_type.lower()}.html"
+    with open(debug_file, "w", encoding="utf-8") as f:
         f.write(page_content)
-    logging.info("Page content saved to page_debug_render.html")
+    logging.info(f"[{env_type}] Page saved to {debug_file}")
 
     soup = BeautifulSoup(page_content, "html.parser")
     
-    # Count total potential matches on page
+    # Count cards on page
     total_cards = soup.find_all("sports-events-event-card")
-    logging.info(f"Total sports-events-event-card elements found: {len(total_cards)}")
+    logging.info(f"[{env_type}] Found {len(total_cards)} card elements on page")
     
-    # Extract matches using both methods
-    logging.info("=== EXTRACTING JSON MATCHES ===")
+    # Extract matches
+    logging.info(f"[{env_type}] Extracting JSON matches...")
     json_matches = extract_json_matches(soup)
     
-    logging.info("=== EXTRACTING HTML MATCHES ===")
+    logging.info(f"[{env_type}] Extracting HTML matches...")
     html_matches = extract_html_matches(soup)
     
-    # Enhanced deduplication using match keys
+    # Combine all matches
     all_matches = []
-    seen_match_keys = set()
-    seen_urls = set()
+    all_matches.extend(json_matches)
+    all_matches.extend(html_matches)
     
-    # Process JSON matches first
-    json_unique = 0
-    for match in json_matches:
-        match_key = create_match_key(match)
-        match_url = match.get("match_url", "")
-        
-        if match_key not in seen_match_keys and match_url not in seen_urls:
-            seen_match_keys.add(match_key)
-            seen_urls.add(match_url)
-            all_matches.append(match)
-            json_unique += 1
-        else:
-            logging.debug(f"JSON duplicate filtered: {match.get('player1')} vs {match.get('player2')}")
-    
-    # Process HTML matches, checking for duplicates
-    html_unique = 0
-    for match in html_matches:
-        match_key = create_match_key(match)
-        match_url = match.get("match_url", "")
-        
-        if match_key not in seen_match_keys and match_url not in seen_urls:
-            seen_match_keys.add(match_key)
-            seen_urls.add(match_url)
-            all_matches.append(match)
-            html_unique += 1
-        else:
-            logging.debug(f"HTML duplicate filtered: {match.get('player1')} vs {match.get('player2')}")
-    
-    logging.info(f"=== FINAL RESULTS WITH ENHANCED DEDUPLICATION ===")
-    logging.info(f"Total card elements on page: {len(total_cards)}")
-    logging.info(f"JSON matches extracted: {len(json_matches)}")
-    logging.info(f"HTML matches extracted: {len(html_matches)}")
-    logging.info(f"JSON unique matches: {json_unique}")
-    logging.info(f"HTML unique matches: {html_unique}")
-    logging.info(f"Total unique matches after deduplication: {len(all_matches)}")
-    
-    # Log some example matches for debugging
-    if all_matches:
-        logging.info("=== SAMPLE MATCHES ===")
-        for i, match in enumerate(all_matches[:5]):
-            logging.info(f"Match {i+1}: {match.get('player1')} vs {match.get('player2')} | {match.get('date')} {match.get('heure')} | {match.get('tournoi')}")
+    logging.info(f"=== [{env_type}] EXTRACTION RESULTS ===")
+    logging.info(f"JSON matches: {len(json_matches)}")
+    logging.info(f"HTML matches: {len(html_matches)}")
+    logging.info(f"Total raw matches: {len(all_matches)}")
     
     return all_matches
 
@@ -653,122 +564,46 @@ def find_best_slug_url(name, elo_df_local):
     logging.warning(f"No close match for '{name}' in Elo DB. Using direct conversion.")
     return player_to_tennisabstract_url(name)
 
-def try_multiple_scraping_strategies():
-    """
-    Simplified scraping approach optimized for Render vs Local
-    """
-    is_render = 'RENDER' in os.environ
-    
-    if is_render:
-        # RENDER: Une seule stratégie fiable
-        logging.info("=== RENDER MODE: Single reliable strategy ===")
-        main_url = "https://www.betclic.fr/tennis-stennis"
-        
-        content = get_scraperapi_response(main_url)
-        if content:
-            soup = BeautifulSoup(content, "html.parser")
-            cards = soup.find_all("sports-events-event-card")
-            logging.info(f"Render strategy found {len(cards)} cards")
-            
-            json_matches = extract_json_matches(soup)
-            html_matches = extract_html_matches(soup)
-            logging.info(f"Render results: {len(json_matches)} JSON + {len(html_matches)} HTML matches")
-            
-            all_matches = []
-            all_matches.extend(json_matches)
-            all_matches.extend(html_matches)
-            
-            logging.info(f"Render total raw matches: {len(all_matches)}")
-            return all_matches
-        else:
-            logging.error("Render: Failed to get content")
-            return []
-    
-    else:
-        # LOCAL: Stratégies multiples car ça marche bien en local
-        logging.info("=== LOCAL MODE: Multiple strategies ===")
-        all_page_matches = []
-        
-        # Strategy 1: Main tennis page
-        main_url = "https://www.betclic.fr/tennis-stennis"
-        logging.info(f"=== LOCAL STRATEGY 1: Main tennis page ===")
-        content1 = get_scraperapi_response(main_url)
-        if content1:
-            soup1 = BeautifulSoup(content1, "html.parser")
-            cards1 = soup1.find_all("sports-events-event-card")
-            logging.info(f"Local strategy 1 found {len(cards1)} cards")
-            
-            json1 = extract_json_matches(soup1)
-            html1 = extract_html_matches(soup1)
-            logging.info(f"Local strategy 1: {len(json1)} JSON + {len(html1)} HTML matches")
-            
-            all_page_matches.extend(json1)
-            all_page_matches.extend(html1)
-        
-        # Strategy 2: Retry with different session (only for local)
-        logging.info(f"=== LOCAL STRATEGY 2: Different session ===")
-        time.sleep(5)  # Pause entre les requêtes
-        content2 = get_scraperapi_response(main_url)
-        if content2 and content2 != content1:  # Only if different content
-            soup2 = BeautifulSoup(content2, "html.parser")
-            cards2 = soup2.find_all("sports-events-event-card")
-            logging.info(f"Local strategy 2 found {len(cards2)} cards")
-            
-            if len(cards2) > 0:
-                json2 = extract_json_matches(soup2)
-                html2 = extract_html_matches(soup2)
-                logging.info(f"Local strategy 2: {len(json2)} JSON + {len(html2)} HTML matches")
-                
-                all_page_matches.extend(json2)
-                all_page_matches.extend(html2)
-        
-        logging.info(f"Local total raw matches: {len(all_page_matches)}")
-        return all_page_matches
-
 def main():
-    """Main function optimized for Render"""
+    """Main function with single, reliable strategy"""
     try:
-        logging.info("=== STARTING ENHANCED BETCLIC SCRAPER FOR RENDER ===")
-        
-        # Detect environment
         is_render = 'RENDER' in os.environ
-        logging.info(f"Running on Render: {is_render}")
+        env_type = "RENDER" if is_render else "LOCAL"
+        
+        logging.info(f"=== [{env_type}] STARTING BETCLIC SCRAPER ===")
 
-        # Scrape matches using multiple strategies
-        raw_matches = try_multiple_scraping_strategies()
+        # Use single, reliable scraping strategy
+        raw_matches = scrape_betclic_simple()
 
         if not raw_matches:
-            logging.warning("No matches found after scraping with all strategies")
+            logging.warning(f"[{env_type}] No matches found after scraping")
             return
 
-        # Apply enhanced deduplication to all collected matches
-        logging.info("=== APPLYING FINAL DEDUPLICATION ===")
+        # Apply enhanced deduplication
+        logging.info(f"[{env_type}] Applying deduplication...")
         all_matches = enhanced_deduplication(raw_matches)
-
-        logging.info(f"Raw matches collected: {len(raw_matches)}")
-        logging.info(f"Final unique matches after deduplication: {len(all_matches)}")
 
         # Create DataFrame
         df = pd.DataFrame(all_matches)
-        logging.info(f"Created DataFrame with {len(df)} matches")
+        logging.info(f"[{env_type}] Created DataFrame with {len(df)} matches")
 
         # Get ELO data from Supabase
-        logging.info("Retrieving ELO data from Supabase...")
+        logging.info(f"[{env_type}] Retrieving ELO data from Supabase...")
         try:
             elo_response = supabase.table("atp_elo_ratings").select("*")
             if elo_response["error"] is None and elo_response["data"]:
                 elo_players = elo_response["data"]
                 elo_df = pd.DataFrame(elo_players)
-                logging.info(f"Loaded {len(elo_df)} players from ELO data")
+                logging.info(f"[{env_type}] Loaded {len(elo_df)} players from ELO data")
             else:
-                logging.warning(f"No ELO data received. Error: {elo_response['error']}")
+                logging.warning(f"[{env_type}] No ELO data received. Error: {elo_response['error']}")
                 elo_df = pd.DataFrame(columns=['player'])
         except Exception as e:
-            logging.error(f"Error retrieving ELO data: {e}")
+            logging.error(f"[{env_type}] Error retrieving ELO data: {e}")
             elo_df = pd.DataFrame(columns=['player'])
 
         # Generate Tennis Abstract URLs
-        logging.info("Generating Tennis Abstract URLs...")
+        logging.info(f"[{env_type}] Generating Tennis Abstract URLs...")
         df["player1_url"] = df["player1"].apply(lambda n: find_best_slug_url(n, elo_df))
         df["player2_url"] = df["player2"].apply(lambda n: find_best_slug_url(n, elo_df))
 
@@ -782,33 +617,22 @@ def main():
 
         df_for_upload = df[final_columns].copy()
 
-        # For Render: Keep ALL matches instead of filtering by ELO
-        # This ensures we don't lose matches due to ELO filtering
-        if is_render:
-            logging.info(f"RENDER MODE: Keeping all {len(df_for_upload)} matches (no ELO filtering)")
-        else:
-            # Local mode: apply ELO filtering
-            if not elo_df.empty:
-                normalized_players_set = set(elo_df['player'].apply(normalize_name))
-                df_for_upload = df_for_upload[
-                    (df_for_upload["player1"].apply(normalize_name).isin(normalized_players_set)) &
-                    (df_for_upload["player2"].apply(normalize_name).isin(normalized_players_set))
-                ]
-                logging.info(f"LOCAL MODE: Filtered to {len(df_for_upload)}/{len(df)} matches with ELO data")
+        # Keep ALL matches for both Render and Local (no ELO filtering)
+        logging.info(f"[{env_type}] Keeping all {len(df_for_upload)} matches (no ELO filtering)")
 
         # Delete old matches
-        logging.info("Deleting old matches from 'upcoming_matches' table...")
+        logging.info(f"[{env_type}] Deleting old matches from 'upcoming_matches' table...")
         try:
             delete_response = supabase.table("upcoming_matches").delete_rows(params={"id": "neq.-1"})
             if delete_response["error"]:
-                logging.error(f"Error deleting old matches: {delete_response['error']}")
+                logging.error(f"[{env_type}] Error deleting old matches: {delete_response['error']}")
             else:
-                logging.info("Successfully deleted old matches")
+                logging.info(f"[{env_type}] Successfully deleted old matches")
         except Exception as e:
-            logging.error(f"Error deleting old matches: {e}")
+            logging.error(f"[{env_type}] Error deleting old matches: {e}")
 
         # Insert new matches
-        logging.info(f"Inserting {len(df_for_upload)} new matches...")
+        logging.info(f"[{env_type}] Inserting {len(df_for_upload)} new matches...")
         data_to_insert = df_for_upload.to_dict(orient='records')
 
         chunk_size = 100
@@ -819,14 +643,15 @@ def main():
                 insert_response = supabase.table("upcoming_matches").insert(chunk)
                 if insert_response["error"] is None:
                     total_inserted += len(chunk)
-                    logging.info(f"Chunk {i // chunk_size + 1} inserted successfully ({len(chunk)} matches)")
+                    logging.info(f"[{env_type}] Chunk {i // chunk_size + 1} inserted ({len(chunk)} matches)")
                 else:
-                    logging.error(f"Error inserting chunk {i // chunk_size + 1}: {insert_response['error']}")
+                    logging.error(f"[{env_type}] Error inserting chunk {i // chunk_size + 1}: {insert_response['error']}")
             except Exception as e:
-                logging.error(f"Error inserting chunk {i // chunk_size + 1}: {e}")
+                logging.error(f"[{env_type}] Error inserting chunk {i // chunk_size + 1}: {e}")
 
-        logging.info(f"=== PROCESS COMPLETED ===")
-        logging.info(f"Total matches scraped: {len(raw_matches)}")
+        logging.info(f"=== [{env_type}] PROCESS COMPLETED ===")
+        logging.info(f"Raw matches scraped: {len(raw_matches)}")
+        logging.info(f"Unique matches after deduplication: {len(all_matches)}")
         logging.info(f"Matches inserted to database: {total_inserted}")
         logging.info(f"Success rate: {total_inserted}/{len(df_for_upload)} matches inserted")
 
