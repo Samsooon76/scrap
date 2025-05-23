@@ -41,6 +41,7 @@ COPY betclic_scraper_v2.py .
 COPY player_stats_scraper.py .
 COPY player_stats_scraper_v2.py .
 COPY betclic_scraper_hybrid.py .
+COPY betclic_scraper_render_optimized.py .
 COPY atp_elo_ratings_rows.csv .
 
 # Installer les dépendances Python avec --no-cache-dir pour éviter les problèmes de cache
