@@ -115,59 +115,84 @@ SCRAPERAPI_ENDPOINT = "http://api.scraperapi.com"
 
 def get_scraperapi_response(url, retries=3):
     """
-    Fetch a URL using ScraperAPI with enhanced parameters for maximum content capture
+    Fetch a URL using ScraperAPI optimized for Render environment limitations
     """
-    params = {
-        'api_key': SCRAPERAPI_KEY,
-        'url': url,
-        'render': 'true',
-        'country_code': 'fr',
-        'device_type': 'desktop',
-        'premium': 'true',
-        'session_number': random.randint(1, 1000),
-        'keep_headers': 'true',
-        'autoparse': 'false',
-        'format': 'html',
-        'wait': '90000',  # Augmenté à 90s pour un chargement complet
-        'scroll': 'true',
-        'scroll_count': '150',  # Beaucoup plus de scrolls pour être sûr
-        'scroll_timeout': '1500',  # Plus rapide entre scrolls
-        'scroll_pause_time': '5000',  # Pause finale plus longue
-        'js_snippet': '''
-            // Script JavaScript ultra-agressif pour charger TOUS les matches
-            console.log("Starting aggressive match loading...");
-            
-            // Phase 1: Scroll rapide pour déclencher les chargements
-            for(let i = 0; i < 200; i++) {
-                window.scrollTo(0, document.body.scrollHeight);
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-            
-            // Phase 2: Attendre et rescroller 
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            
-            // Phase 3: Scroll plus lent pour les éléments paresseux
-            for(let i = 0; i < 100; i++) {
-                window.scrollTo(0, document.body.scrollHeight + i * 100);
-                await new Promise(resolve => setTimeout(resolve, 200));
-            }
-            
-            // Phase 4: Forcer le chargement des cartes de match
-            let loadMoreButtons = document.querySelectorAll('[data-testid*="load"], .load-more, .voir-plus, .show-more');
-            for(let btn of loadMoreButtons) {
-                if(btn && btn.click) {
-                    btn.click();
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+    # Detect if running on Render to use different parameters
+    is_render = 'RENDER' in os.environ
+    
+    if is_render:
+        # RENDER: Conservative but reliable parameters
+        params = {
+            'api_key': SCRAPERAPI_KEY,
+            'url': url,
+            'render': 'true',
+            'country_code': 'fr',
+            'device_type': 'desktop',
+            'premium': 'true',
+            'session_number': random.randint(1, 1000),
+            'keep_headers': 'true',
+            'autoparse': 'false',
+            'format': 'html',
+            'wait': '45000',  # Plus conservateur pour Render
+            'scroll': 'true',
+            'scroll_count': '30',  # Moins de scrolls mais plus fiables
+            'scroll_timeout': '2000',  # Plus lent mais plus stable
+            'scroll_pause_time': '3000',
+            'js_snippet': '''
+                // Script JS optimisé pour Render
+                console.log("Render-optimized scrolling starting...");
+                
+                // Scroll progressif et patient
+                for(let i = 0; i < 50; i++) {
+                    window.scrollTo(0, document.body.scrollHeight);
+                    await new Promise(resolve => setTimeout(resolve, 300));
                 }
-            }
-            
-            // Phase 5: Attente finale pour stabilisation
-            await new Promise(resolve => setTimeout(resolve, 8000));
-            
-            console.log("Match loading complete. Cards found:", document.querySelectorAll('sports-events-event-card').length);
-        ''',
-        'screenshot': 'false'
-    }
+                
+                // Attendre le chargement
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                
+                // Second passage plus lent
+                for(let i = 0; i < 20; i++) {
+                    window.scrollTo(0, document.body.scrollHeight + i * 200);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+                
+                console.log("Render scrolling complete");
+            ''',
+            'screenshot': 'false'
+        }
+        timeout = 80  # Timeout plus court pour Render
+        log_prefix = "RENDER-OPTIMIZED"
+    else:
+        # LOCAL: Plus agressif car ça marche en local
+        params = {
+            'api_key': SCRAPERAPI_KEY,
+            'url': url,
+            'render': 'true',
+            'country_code': 'fr',
+            'device_type': 'desktop',
+            'premium': 'true',
+            'session_number': random.randint(1, 1000),
+            'keep_headers': 'true',
+            'autoparse': 'false',
+            'format': 'html',
+            'wait': '60000',  # Plus long en local car ça marche
+            'scroll': 'true',
+            'scroll_count': '100',
+            'scroll_timeout': '1500',
+            'scroll_pause_time': '4000',
+            'js_snippet': '''
+                // Script JS agressif pour local
+                for(let i = 0; i < 150; i++) {
+                    window.scrollTo(0, document.body.scrollHeight);
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                await new Promise(resolve => setTimeout(resolve, 6000));
+            ''',
+            'screenshot': 'false'
+        }
+        timeout = 120
+        log_prefix = "LOCAL-ENHANCED"
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
@@ -176,26 +201,24 @@ def get_scraperapi_response(url, retries=3):
         'Accept-Encoding': 'gzip, deflate, br',
         'DNT': '1',
         'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache'
+        'Upgrade-Insecure-Requests': '1'
     }
     
     for attempt in range(retries):
         try:
-            logging.info(f"Fetching {url} via ScraperAPI (attempt {attempt + 1}/{retries}) - ULTRA ENHANCED")
+            logging.info(f"Fetching {url} via ScraperAPI (attempt {attempt + 1}/{retries}) - {log_prefix}")
             
             # Randomize session for each attempt
             params['session_number'] = random.randint(1, 1000)
             
-            response = requests.get(SCRAPERAPI_ENDPOINT, params=params, headers=headers, timeout=150)
+            response = requests.get(SCRAPERAPI_ENDPOINT, params=params, headers=headers, timeout=timeout)
             
             if response.status_code == 200:
                 content = response.text
                 if "Error 403" in content or "Forbidden" in content:
                     logging.warning(f"Received 403 Forbidden page (attempt {attempt + 1})")
                     if attempt < retries - 1:
-                        time.sleep(15)
+                        time.sleep(10)
                         continue
                 else:
                     # Vérifier si on a du contenu valide
@@ -206,17 +229,17 @@ def get_scraperapi_response(url, retries=3):
                     else:
                         logging.warning(f"Page fetched but no match cards found (attempt {attempt + 1})")
                         if attempt < retries - 1:
-                            time.sleep(15)
+                            time.sleep(10)
                             continue
             else:
                 logging.warning(f"ScraperAPI returned status code {response.status_code}")
                 if attempt < retries - 1:
-                    time.sleep(15)
+                    time.sleep(10)
                     
         except requests.exceptions.RequestException as e:
             logging.error(f"Request failed: {e}")
             if attempt < retries - 1:
-                time.sleep(15)
+                time.sleep(10)
     
     logging.error(f"Failed to fetch {url} after {retries} attempts")
     return None
@@ -417,26 +440,96 @@ def extract_html_matches(soup):
 def create_match_key(match):
     """
     Create a unique key for match deduplication based on players and time
+    Enhanced to be more robust against variations
     """
-    # Normalize player names for comparison
+    # Normalize and clean player names
     p1 = normalize_name(match.get("player1", ""))
     p2 = normalize_name(match.get("player2", ""))
     
+    # Remove common prefixes/suffixes that might vary
+    def clean_player_name(name):
+        # Remove common tennis prefixes/suffixes
+        name = re.sub(r'\(.*?\)', '', name)  # Remove parentheses content
+        name = re.sub(r'\d+', '', name)  # Remove numbers
+        name = name.strip().lower()
+        return name
+    
+    p1_clean = clean_player_name(p1)
+    p2_clean = clean_player_name(p2)
+    
     # Sort players to handle order variations (A vs B = B vs A)
-    players = tuple(sorted([p1, p2]))
+    players = tuple(sorted([p1_clean, p2_clean]))
     
     # Use date and hour for timing (ignore minutes/seconds for fuzzy matching)
-    date_str = str(match.get("date", ""))
-    heure_str = str(match.get("heure", ""))
+    date_str = str(match.get("date", "")).lower().strip()
+    heure_str = str(match.get("heure", "")).strip()
     
     # Extract hour from time string (e.g., "14:30" -> "14")
     hour = ""
     if ":" in heure_str:
         hour = heure_str.split(":")[0]
+    elif heure_str and heure_str.isdigit():
+        hour = heure_str[:2] if len(heure_str) >= 2 else heure_str
     
-    # Create composite key
+    # Create composite key - more robust
     key = f"{players}|{date_str}|{hour}"
     return key
+
+def enhanced_deduplication(matches_list):
+    """
+    Enhanced deduplication with multiple checks to avoid any duplicates
+    """
+    logging.info("=== ENHANCED DEDUPLICATION PROCESS ===")
+    
+    unique_matches = []
+    seen_match_keys = set()
+    seen_urls = set()
+    seen_player_pairs = set()  # Additional check
+    
+    duplicate_count = 0
+    
+    for i, match in enumerate(matches_list):
+        # Multiple deduplication checks
+        match_key = create_match_key(match)
+        match_url = match.get("match_url", "")
+        
+        # Create player pair key (sorted players)
+        p1 = normalize_name(match.get("player1", ""))
+        p2 = normalize_name(match.get("player2", ""))
+        player_pair = tuple(sorted([p1, p2]))
+        
+        # Check for duplicates using multiple criteria
+        is_duplicate = False
+        duplicate_reason = ""
+        
+        if match_key in seen_match_keys:
+            is_duplicate = True
+            duplicate_reason = "match_key"
+        elif match_url and match_url in seen_urls:
+            is_duplicate = True
+            duplicate_reason = "url"
+        elif player_pair in seen_player_pairs:
+            # Additional check: if same players already seen today, it might be duplicate
+            # This is more aggressive but helps catch edge cases
+            current_date = match.get("date", "")
+            if current_date:  # Only apply this check if we have date info
+                is_duplicate = True
+                duplicate_reason = "player_pair"
+        
+        if is_duplicate:
+            duplicate_count += 1
+            logging.debug(f"Duplicate #{duplicate_count} filtered ({duplicate_reason}): {match.get('player1')} vs {match.get('player2')} | {match.get('date')} {match.get('heure')}")
+        else:
+            # Add to seen sets
+            seen_match_keys.add(match_key)
+            if match_url:
+                seen_urls.add(match_url)
+            seen_player_pairs.add(player_pair)
+            
+            unique_matches.append(match)
+    
+    logging.info(f"Deduplication complete: {len(matches_list)} → {len(unique_matches)} (removed {duplicate_count} duplicates)")
+    return unique_matches
 
 def scrape_betclic_matches():
     """
@@ -562,83 +655,75 @@ def find_best_slug_url(name, elo_df_local):
 
 def try_multiple_scraping_strategies():
     """
-    Try multiple URLs and approaches to maximize match capture
+    Simplified scraping approach optimized for Render vs Local
     """
-    all_page_matches = []
+    is_render = 'RENDER' in os.environ
     
-    # Strategy 1: Main tennis page
-    main_url = "https://www.betclic.fr/tennis-stennis"
-    logging.info(f"=== STRATEGY 1: Main tennis page ===")
-    content1 = get_scraperapi_response(main_url)
-    if content1:
-        soup1 = BeautifulSoup(content1, "html.parser")
-        cards1 = soup1.find_all("sports-events-event-card")
-        logging.info(f"Strategy 1 found {len(cards1)} cards")
+    if is_render:
+        # RENDER: Une seule stratégie fiable
+        logging.info("=== RENDER MODE: Single reliable strategy ===")
+        main_url = "https://www.betclic.fr/tennis-stennis"
         
-        json1 = extract_json_matches(soup1)
-        html1 = extract_html_matches(soup1)
-        logging.info(f"Strategy 1: {len(json1)} JSON + {len(html1)} HTML matches")
-        
-        all_page_matches.extend(json1)
-        all_page_matches.extend(html1)
-    
-    # Strategy 2: Try with different parameters (mobile view)
-    logging.info(f"=== STRATEGY 2: Mobile view attempt ===")
-    mobile_params = {
-        'api_key': SCRAPERAPI_KEY,
-        'url': main_url,
-        'render': 'true',
-        'device_type': 'mobile',  # Try mobile view
-        'country_code': 'fr',
-        'premium': 'true',
-        'wait': '45000',  # Shorter wait for mobile
-        'scroll': 'true',
-        'scroll_count': '80',
-    }
-    
-    try:
-        mobile_response = requests.get(SCRAPERAPI_ENDPOINT, params=mobile_params, timeout=90)
-        if mobile_response.status_code == 200:
-            mobile_content = mobile_response.text
-            if 'sports-events-event-card' in mobile_content:
-                mobile_soup = BeautifulSoup(mobile_content, "html.parser")
-                mobile_cards = mobile_soup.find_all("sports-events-event-card")
-                logging.info(f"Strategy 2 (mobile) found {len(mobile_cards)} cards")
-                
-                mobile_json = extract_json_matches(mobile_soup)
-                mobile_html = extract_html_matches(mobile_soup)
-                logging.info(f"Strategy 2: {len(mobile_json)} JSON + {len(mobile_html)} HTML matches")
-                
-                all_page_matches.extend(mobile_json)
-                all_page_matches.extend(mobile_html)
-            else:
-                logging.warning("Strategy 2: No cards found in mobile response")
-        else:
-            logging.warning(f"Strategy 2: Mobile request failed with status {mobile_response.status_code}")
-    except Exception as e:
-        logging.error(f"Strategy 2 failed: {e}")
-    
-    # Strategy 3: Try tennis ATP specifically 
-    logging.info(f"=== STRATEGY 3: ATP specific ===")
-    atp_url = "https://www.betclic.fr/tennis-stennis/atp"
-    content3 = get_scraperapi_response(atp_url)
-    if content3:
-        soup3 = BeautifulSoup(content3, "html.parser")
-        cards3 = soup3.find_all("sports-events-event-card")
-        logging.info(f"Strategy 3 (ATP) found {len(cards3)} cards")
-        
-        if cards3:  # Only extract if we found cards
-            json3 = extract_json_matches(soup3)
-            html3 = extract_html_matches(soup3)
-            logging.info(f"Strategy 3: {len(json3)} JSON + {len(html3)} HTML matches")
+        content = get_scraperapi_response(main_url)
+        if content:
+            soup = BeautifulSoup(content, "html.parser")
+            cards = soup.find_all("sports-events-event-card")
+            logging.info(f"Render strategy found {len(cards)} cards")
             
-            all_page_matches.extend(json3)
-            all_page_matches.extend(html3)
+            json_matches = extract_json_matches(soup)
+            html_matches = extract_html_matches(soup)
+            logging.info(f"Render results: {len(json_matches)} JSON + {len(html_matches)} HTML matches")
+            
+            all_matches = []
+            all_matches.extend(json_matches)
+            all_matches.extend(html_matches)
+            
+            logging.info(f"Render total raw matches: {len(all_matches)}")
+            return all_matches
+        else:
+            logging.error("Render: Failed to get content")
+            return []
     
-    logging.info(f"=== ALL STRATEGIES COMBINED ===")
-    logging.info(f"Total raw matches from all strategies: {len(all_page_matches)}")
-    
-    return all_page_matches
+    else:
+        # LOCAL: Stratégies multiples car ça marche bien en local
+        logging.info("=== LOCAL MODE: Multiple strategies ===")
+        all_page_matches = []
+        
+        # Strategy 1: Main tennis page
+        main_url = "https://www.betclic.fr/tennis-stennis"
+        logging.info(f"=== LOCAL STRATEGY 1: Main tennis page ===")
+        content1 = get_scraperapi_response(main_url)
+        if content1:
+            soup1 = BeautifulSoup(content1, "html.parser")
+            cards1 = soup1.find_all("sports-events-event-card")
+            logging.info(f"Local strategy 1 found {len(cards1)} cards")
+            
+            json1 = extract_json_matches(soup1)
+            html1 = extract_html_matches(soup1)
+            logging.info(f"Local strategy 1: {len(json1)} JSON + {len(html1)} HTML matches")
+            
+            all_page_matches.extend(json1)
+            all_page_matches.extend(html1)
+        
+        # Strategy 2: Retry with different session (only for local)
+        logging.info(f"=== LOCAL STRATEGY 2: Different session ===")
+        time.sleep(5)  # Pause entre les requêtes
+        content2 = get_scraperapi_response(main_url)
+        if content2 and content2 != content1:  # Only if different content
+            soup2 = BeautifulSoup(content2, "html.parser")
+            cards2 = soup2.find_all("sports-events-event-card")
+            logging.info(f"Local strategy 2 found {len(cards2)} cards")
+            
+            if len(cards2) > 0:
+                json2 = extract_json_matches(soup2)
+                html2 = extract_html_matches(soup2)
+                logging.info(f"Local strategy 2: {len(json2)} JSON + {len(html2)} HTML matches")
+                
+                all_page_matches.extend(json2)
+                all_page_matches.extend(html2)
+        
+        logging.info(f"Local total raw matches: {len(all_page_matches)}")
+        return all_page_matches
 
 def main():
     """Main function optimized for Render"""
@@ -658,21 +743,8 @@ def main():
 
         # Apply enhanced deduplication to all collected matches
         logging.info("=== APPLYING FINAL DEDUPLICATION ===")
-        all_matches = []
-        seen_match_keys = set()
-        seen_urls = set()
-        
-        for match in raw_matches:
-            match_key = create_match_key(match)
-            match_url = match.get("match_url", "")
-            
-            if match_key not in seen_match_keys and match_url not in seen_urls:
-                seen_match_keys.add(match_key)
-                seen_urls.add(match_url)
-                all_matches.append(match)
-            else:
-                logging.debug(f"Final duplicate filtered: {match.get('player1')} vs {match.get('player2')}")
-        
+        all_matches = enhanced_deduplication(raw_matches)
+
         logging.info(f"Raw matches collected: {len(raw_matches)}")
         logging.info(f"Final unique matches after deduplication: {len(all_matches)}")
 
