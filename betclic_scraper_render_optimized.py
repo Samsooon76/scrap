@@ -119,7 +119,7 @@ def get_scraperapi_response(url, retries=3):
     """
     is_render = 'RENDER' in os.environ
     
-    # Simple, reliable parameters that work everywhere
+    # Aggressive scrolling parameters to load ALL matches
     params = {
         'api_key': SCRAPERAPI_KEY,
         'url': url,
@@ -131,12 +131,14 @@ def get_scraperapi_response(url, retries=3):
         'keep_headers': 'true',
         'autoparse': 'false',
         'format': 'html',
-        'wait': '30000' if is_render else '45000',  # Plus court pour Render
+        'wait': '60000',  # 60s pour laisser charger complètement
         'scroll': 'true',
-        'scroll_count': '20' if is_render else '50',  # Moins pour Render
-        'scroll_timeout': '3000',  # Stable pour tous
-        'scroll_pause_time': '2000',
-        'screenshot': 'false'
+        'scroll_count': '150' if is_render else '200',  # BEAUCOUP plus de scrolls
+        'scroll_timeout': '5000',  # 5s entre chaque scroll
+        'scroll_pause_time': '3000',  # 3s de pause entre scrolls
+        'screenshot': 'false',
+        'scroll_to_bottom': 'true',  # Force scroll jusqu'en bas
+        'execute_script': 'window.scrollTo(0, document.body.scrollHeight);'  # JavaScript pour forcer le scroll
     }
     
     headers = {
@@ -147,12 +149,16 @@ def get_scraperapi_response(url, retries=3):
         'Connection': 'keep-alive'
     }
     
-    timeout = 60 if is_render else 90
+    timeout = 120 if is_render else 150  # Timeout plus long pour le scrolling intensif
     env_type = "RENDER" if is_render else "LOCAL"
     
     for attempt in range(retries):
         try:
+            current_scroll_count = params['scroll_count']
+            current_wait = int(params['wait']) / 1000  # Convert to seconds for logging
+            
             logging.info(f"[{env_type}] Fetching {url} via ScraperAPI (attempt {attempt + 1}/{retries})")
+            logging.info(f"[{env_type}] Scrolling config: wait={current_wait}s, scroll_count={current_scroll_count}, timeout={params['scroll_timeout']}ms")
             
             params['session_number'] = random.randint(1, 1000)
             response = requests.get(SCRAPERAPI_ENDPOINT, params=params, headers=headers, timeout=timeout)
@@ -168,6 +174,18 @@ def get_scraperapi_response(url, retries=3):
                     if 'sports-events-event-card' in content:
                         card_count = content.count('sports-events-event-card')
                         logging.info(f"[{env_type}] Success! Content: {len(content)} chars, Cards: {card_count}")
+                        
+                        # Validation: s'assurer qu'on a un nombre raisonnable de matches
+                        if card_count < 30:
+                            logging.warning(f"[{env_type}] Only {card_count} cards found - might need more scrolling")
+                            if attempt < retries - 1:
+                                logging.info(f"[{env_type}] Retrying with more aggressive scrolling...")
+                                # Increase scroll count for retry
+                                params['scroll_count'] = str(int(params['scroll_count']) + 50)
+                                params['wait'] = '90000'  # 90s wait for retry
+                                time.sleep(10)
+                                continue
+                        
                         return content
                     else:
                         logging.warning(f"[{env_type}] No match cards found (attempt {attempt + 1})")
